@@ -1,0 +1,43 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "backend:configure (once)",
+      "type": "process",
+      "command": "cmake",
+      "args": [
+        "-S", ".", "-B", "build",
+        "-G", "Visual Studio 17 2022",
+        "-A", "x64",
+        "-DCMAKE_TOOLCHAIN_FILE=${env:VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_SUPPRESS_REGENERATION=ON"
+      ],
+      "options": { "cwd": "${workspaceFolder}/back" }
+    },
+    {
+      "label": "backend:build",
+      "type": "process",
+      "command": "cmake",
+      "args": ["--build", "build", "--config", "Release", "--target", "backend", "--", "/m"],
+      "options": { "cwd": "${workspaceFolder}/back" }
+    },
+    {
+      "label": "frontend:dev",
+      "type": "process",
+      "command": "npm",
+      "args": ["run", "dev"],
+      "options": { "cwd": "${workspaceFolder}/front" }
+    },
+    {
+      "label": "fullstack:dev (build backend + run both)",
+      "dependsOrder": "parallel",
+      "dependsOn": ["backend:build", "frontend:dev"]
+    },
+    {
+      "label": "fullstack:dev (no build)",
+      "dependsOrder": "parallel",
+      "dependsOn": ["frontend:dev"]
+    }
+  ]
+}

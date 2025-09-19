@@ -1,0 +1,10 @@
+^C:\USERS\THEBE\SOURCE\REPOS\PERSONAL_PROJS\FREE_FORM\FREE_FORM_WEB\BACK\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/thebe/source/repos/personal_projs/free_form/free_form_web/back -BC:/Users/thebe/source/repos/personal_projs/free_form/free_form_web/back/build --check-stamp-file C:/Users/thebe/source/repos/personal_projs/free_form/free_form_web/back/build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

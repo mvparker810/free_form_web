@@ -1,0 +1,10 @@
+^C:\USERS\THEBE\SOURCE\REPOS\PERSONAL_PROJS\FREE_FORM\FREE_FORM_WEB\BACK\BUILD\CMAKEFILES\DBC293DF709994D995BB1D13C8ED5BB8\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/thebe/source/repos/personal_projs/free_form/free_form_web/back -BC:/Users/thebe/source/repos/personal_projs/free_form/free_form_web/back/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Users/thebe/source/repos/personal_projs/free_form/free_form_web/back/build/complexlib_web_backend.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
