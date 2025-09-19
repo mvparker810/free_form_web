@@ -1,0 +1,35 @@
+{
+  "version": 4,
+  "configurations": [
+    {
+      "name": "MSVC-x64",
+      "intelliSenseMode": "msvc-x64",
+      "compilerPath": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/*/bin/Hostx64/x64/cl.exe",
+      "windowsSdkVersion": "10.0.26100.0",
+      "cppStandard": "c++17",
+      "cStandard": "c17",
+
+      // Where IntelliSense should look for headers
+      "includePath": [
+        "${workspaceFolder}/back",                           // your sources
+        "${workspaceFolder}/extern/complexlib/include",     // your single-header lib
+        "C:/dev/vcpkg/installed/x64-windows/include"        // vcpkg headers (httplib, nlohmann/json)
+      ],
+
+      // Optional: helps "Go to Definition" scanning
+      "browse": {
+        "path": [
+          "${workspaceFolder}/back",
+          "C:/dev/vcpkg/installed/x64-windows/include"
+        ],
+        "limitSymbolsToIncludedHeaders": true
+      },
+
+      // If you use any custom defines, add them here
+      "defines": [
+        "UNICODE",
+        "_UNICODE"
+      ]
+    }
+  ]
+}

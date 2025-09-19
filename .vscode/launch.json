@@ -1,0 +1,43 @@
+{
+  "version": "0.2.0",
+  "compounds": [
+    {
+      "name": "Run Fullstack (build backend + front)",
+      "configurations": ["Run Frontend (front)", "Run Backend (build+run)"],
+      "stopAll": true
+    },
+    {
+      "name": "Run Fullstack (no build)",
+      "configurations": ["Run Frontend (front)", "Run Backend (no build)"],
+      "stopAll": true
+    }
+  ],
+  "configurations": [
+    {
+      "name": "Run Frontend (front)",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/front",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Run Backend (build+run)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/back/build/Release/backend.exe",
+      "preLaunchTask": "backend:build",
+      "cwd": "${workspaceFolder}/back",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Run Backend (no build)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/back/build/Release/backend.exe",
+      "cwd": "${workspaceFolder}/back",
+      "console": "integratedTerminal"
+    }
+  ]
+}
