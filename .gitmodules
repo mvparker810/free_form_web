@@ -1,0 +1,4 @@
+[submodule "extern/free_form"]
+	path = extern/free_form
+	url = https://github.com/mvparker810/free_form.git
+	branch = main
