@@ -1,22 +1,28 @@
 cmake_minimum_required(VERSION 3.16)
-project(complexlib_web_backend CXX)
+project(freeform_web_backend C CXX)
+
+set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 
-# vcpkg packages (install once: vcpkg install cpp-httplib nlohmann-json)
 find_package(httplib CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
-add_executable(backend main.cpp)
+add_executable(backend
+  main.cpp
+)
 
-# Include your single-header library
-# Prefer a local sibling repo during dev; fall back to submodule
-set(LOCAL_COMPLEXLIB_DIR "${CMAKE_SOURCE_DIR}/../complexlib")
-if(EXISTS "${LOCAL_COMPLEXLIB_DIR}/include/complexlib.h")
-  message(STATUS "Using LOCAL complexlib at: ${LOCAL_COMPLEXLIB_DIR}")
-  target_include_directories(backend PRIVATE "${LOCAL_COMPLEXLIB_DIR}/include")
+# Base dir for free_form (relative to back/)
+set(FREEFORM_BASE_DIR "${CMAKE_SOURCE_DIR}/../extern/free_form")
+
+target_include_directories(backend PRIVATE "${FREEFORM_BASE_DIR}")
+
+# Add the C implementation explicitly
+set(FREEFORM_IMPL "${FREEFORM_BASE_DIR}/freeform_impl.c")
+if(EXISTS "${FREEFORM_IMPL}")
+  message(STATUS "Linking freeform implementation: ${FREEFORM_IMPL}")
+  target_sources(backend PRIVATE "${FREEFORM_IMPL}")
 else()
-  message(STATUS "Using SUBMODULE complexlib at: ${CMAKE_SOURCE_DIR}/../extern/complexlib")
-  target_include_directories(backend PRIVATE "${CMAKE_SOURCE_DIR}/../extern/complexlib/include")
+  message(FATAL_ERROR "freeform_impl.c not found at ${FREEFORM_IMPL}")
 endif()
 
 target_link_libraries(backend PRIVATE httplib::httplib nlohmann_json::nlohmann_json)

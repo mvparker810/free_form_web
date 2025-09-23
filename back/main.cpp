@@ -7,9 +7,6 @@
 
 extern "C" {
     #include "../extern/free_form/freeform.h"
-//#include "../extern/complexlib/include/complexlib.h"  // falls back to submodule
-// If you use the local dev override (../complexlib), CMake's include dirs will
-// point here automatically; you don't need to change this include path.
 }
 
 using json = nlohmann::json;
@@ -98,17 +95,30 @@ int main() {
     });
 
 
+
+
+
+
+
+    ff_Sketch* sketch = (ff_Sketch*)malloc(sizeof(ff_Sketch));
+    ff_SketchInit(sketch, 1024, 256, 128);
+
+    ff_ParamHandle x = ff_CreateParam(sketch,0.0f);
+    ff_ParamHandle y = ff_CreateParam(sketch,3.0f);
+
+    ff_EntityDef point_def = ff_EntityDef_DEFAULT(FF_POINT);
+    point_def.data.point.x = x;
+    point_def.data.point.y = y;
+
+    ff_EntityHandle point = ff_CreateEntity(sketch, point_def);
+
+
     const char* host = "127.0.0.1";
     const int   port = 8080;
     std::printf("Backend listening on http://%s:%d\n", host, port);
     api.listen(host, port);
+
+    ff_SketchFree(sketch);
+
     return 0;
 }
-
-
-/*
-vcpkg install cpp-httplib nlohmann-json
-cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE="%VCPKG_ROOT%/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
-./build/Release/backend.exe
-*/
