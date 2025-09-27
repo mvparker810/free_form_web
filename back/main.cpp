@@ -101,24 +101,31 @@ int main() {
 
 
     ff_Sketch* sketch = (ff_Sketch*)malloc(sizeof(ff_Sketch));
-    ff_SketchInit(sketch, 1024, 256, 128);
+    ffSketch_Init(sketch, 1024, 256, 128);
 
-    ff_ParamHandle x = ff_CreateParam(sketch,0.0f);
-    ff_ParamHandle y = ff_CreateParam(sketch,3.0f);
+    ff_ParamHandle x = ffSketch_AddParameter(sketch,ff_ParameterDef{3.0f});
+    ff_ParamHandle y = ffSketch_AddParameter(sketch,ff_ParameterDef{-3.0f});
 
+    ff_ConstraintDef cDef = ff_ConstraintDef_DEFAULT();
+    //cDef.type = FF_GENERAL;
+    cDef.eq = exprInit_op(OperatorType_SUB, exprInit_param(x),exprInit_param(y));
+    ffSketch_AddConstraint(sketch, cDef);
+    /*
     ff_EntityDef point_def = ff_EntityDef_DEFAULT(FF_POINT);
     point_def.data.point.x = x;
     point_def.data.point.y = y;
+    ff_EntityHandle point = ffSketch_AddEntity(sketch, point_def);
+    */
 
-    ff_EntityHandle point = ff_CreateEntity(sketch, point_def);
-
+    printf(ffSketch_Solve(sketch, 0.01, 8) ? "Converged\n" : "Did not converge\n");
 
     const char* host = "127.0.0.1";
     const int   port = 8080;
     std::printf("Backend listening on http://%s:%d\n", host, port);
     api.listen(host, port);
 
-    ff_SketchFree(sketch);
+    ffSketch_Free(sketch);
+    free(sketch);
 
     return 0;
 }
