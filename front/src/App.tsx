@@ -16,8 +16,8 @@ type IconName =
 
 // --- Spritesheet config ---
 const SPRITE_URL = '/icons/sprite.png'
-const ICON_SIZE = 16 // each icon is 16x16 pixels
-const ICON_COLS = 8   // number of icons per row in the spritesheet
+const ICON_SIZE = 16
+const ICON_COLS = 8
 
 const ICON_INDEX: Record<IconName, number> = {
   new: 0, open: 1, undo: 2, redo: 3, solve: 4, help: 5,
@@ -32,6 +32,7 @@ function spritePos(name: IconName) {
   const y = Math.floor(idx / ICON_COLS) * ICON_SIZE
   return { x, y }
 }
+
 // --- Utils ---
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v))
@@ -49,11 +50,10 @@ function distance(p1: Vec2, p2: Vec2): number {
   return Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2)
 }
 
-// --- Runtime self-tests (printed to Console on mount) ---
+// --- Runtime self-tests ---
 function runSelfTests(): string {
   type C<T> = { name: string; got: T; want: T }
   const cases: C<any>[] = [
-    // existing tests
     { name: 'clamp inside',       got: clamp(5, 0, 10),   want: 5 },
     { name: 'clamp low bound',    got: clamp(-3, 0, 10),  want: 0 },
     { name: 'clamp high bound',   got: clamp(12, 0, 10),  want: 10 },
@@ -63,7 +63,6 @@ function runSelfTests(): string {
     { name: 'snapGrid z=2',       got: snapGrid(10, 2),   want: 2 },
     { name: 'snapGrid z=20',      got: snapGrid(10, 20),  want: 1 },
     { name: 'clamp big',          got: clamp(1e9, -1e6, 1e6), want: 1e6 },
-    // extra coverage
     { name: 'snapGrid z tiny',    got: snapGrid(10, 0.1), want: 50 },
     { name: 'distance test',      got: distance({x:0, y:0}, {x:3, y:4}), want: 5 },
   ]
@@ -83,37 +82,41 @@ export default function App() {
   const [out, setOut] = useState<string>('ready')
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
-  // UI scale (1 = 100%)
   const [uiScale, setUiScale] = useState<number>(1.4)
   const bumpScale = (d: number) => setUiScale(s => clamp(Math.round((s + d) * 10) / 10, 0.8, 2.5))
 
-  // Viewport & interaction
   const [zoom, setZoom] = useState<number>(1)
   const [origin, setOrigin] = useState<Vec2>({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
   const panStart = useRef<Vec2>({ x: 0, y: 0 })
   const originStart = useRef<Vec2>({ x: 0, y: 0 })
 
-  // Model state
   const [tool, setTool] = useState<'select'|'point'|'line'|'circle'|'arc'|'delete'>('select')
   const [constraint, setConstraint] = useState<'none'|'coincident'|'parallel'|'perpendicular'|'fixed'|'measurement'|'equals'|'tangent'|'horizontal'|'vertical'>('none')
   const [shapes, setShapes] = useState<Shape[]>([])
+  
+  const [activeTab, setActiveTab] = useState<'parameters'|'entities'|'constraints'>('entities')
+  
+  const [rightPanelWidth, setRightPanelWidth] = useState(200)
+  const [isResizing, setIsResizing] = useState(false)
+  const resizeStartX = useRef(0)
+  const resizeStartWidth = useRef(200)
+  
+  const [backendEntities, setBackendEntities] = useState<any[]>([])
+  const [backendParams, setBackendParams] = useState<any[]>([])
+  const [backendConstraints, setBackendConstraints] = useState<any[]>([])
 
-  // Line drawing state
   const [isDrawingLine, setIsDrawingLine] = useState(false)
   const [lineStart, setLineStart] = useState<Vec2 | null>(null)
   const [tempLineEnd, setTempLineEnd] = useState<Vec2 | null>(null)
 
-  // Arc drawing state
   const [isDrawingArc, setIsDrawingArc] = useState(false)
   const [arcCenter, setArcCenter] = useState<Vec2 | null>(null)
   const [arcRadius, setArcRadius] = useState<number | null>(null)
 
-  // Undo/Redo stacks
   const [undoStack, setUndo] = useState<Shape[][]>([])
   const [redoStack, setRedo] = useState<Shape[][]>([])
 
-  // File input (Open)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   function appendConsole(msg: string) {
@@ -132,7 +135,80 @@ export default function App() {
 
   useEffect(() => { appendConsole(runSelfTests()) }, [])
 
-  // --- Render loop ---
+  async function fetchBackendData() {
+    try {
+      const [entitiesRes, paramsRes, constraintsRes] = await Promise.all([
+        fetch('/api/sketch/entities'),
+        fetch('/api/sketch/parameters'),
+        fetch('/api/sketch/constraints')
+      ])
+      
+      if (entitiesRes.ok) {
+        const entities = await entitiesRes.json()
+        setBackendEntities(entities)
+        appendConsole(`Fetched ${entities.length} entities: ${JSON.stringify(entities)}`)
+      } else {
+        appendConsole(`! Entities fetch failed: ${entitiesRes.status}`)
+      }
+      
+      if (paramsRes.ok) {
+        const params = await paramsRes.json()
+        setBackendParams(params)
+        appendConsole(`Fetched ${params.length} parameters: ${JSON.stringify(params)}`)
+      } else {
+        appendConsole(`! Parameters fetch failed: ${paramsRes.status}`)
+      }
+      
+      if (constraintsRes.ok) {
+        const constraints = await constraintsRes.json()
+        setBackendConstraints(constraints)
+        appendConsole(`Fetched ${constraints.length} constraints`)
+      } else {
+        appendConsole(`! Constraints fetch failed: ${constraintsRes.status}`)
+      }
+    } catch (e: any) {
+      appendConsole(`! Failed to fetch backend data: ${e?.message ?? e}`)
+    }
+  }
+
+  useEffect(() => {
+    fetchBackendData()
+  }, [])
+
+  function onResizeStart(e: React.MouseEvent) {
+    setIsResizing(true)
+    resizeStartX.current = e.clientX
+    resizeStartWidth.current = rightPanelWidth
+  }
+
+  useEffect(() => {
+    if (!isResizing) return
+
+    function onResizeMove(e: MouseEvent) {
+      e.preventDefault()
+      const delta = resizeStartX.current - e.clientX
+      const newWidth = Math.max(150, Math.min(600, resizeStartWidth.current + delta))
+      setRightPanelWidth(newWidth)
+    }
+
+    function onResizeEnd() {
+      setIsResizing(false)
+    }
+
+    document.body.style.cursor = 'ew-resize'
+    document.body.style.userSelect = 'none'
+
+    window.addEventListener('mousemove', onResizeMove)
+    window.addEventListener('mouseup', onResizeEnd)
+
+    return () => {
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      window.removeEventListener('mousemove', onResizeMove)
+      window.removeEventListener('mouseup', onResizeEnd)
+    }
+  }, [isResizing])
+
   useEffect(() => {
     const cvs = canvasRef.current
     if (!cvs) return
@@ -146,8 +222,9 @@ export default function App() {
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-    const BG = '#ffffffff'
-    const LINE = '#003399'
+    const BG = '#5762c8'
+    const LINE = '#ffffff'
+    const BACKEND_COLOR = '#ff6699'
 
     ctx.fillStyle = BG
     ctx.fillRect(0, 0, w, h)
@@ -158,22 +235,17 @@ export default function App() {
 
     drawGrid(ctx, w, h, zoom, origin)
 
-    // axes
-    ctx.strokeStyle = LINE
-    ctx.lineWidth = 2/zoom
-    ctx.beginPath()
-    ctx.moveTo(-w, 0)
-    ctx.lineTo(w, 0)
-    ctx.moveTo(0, -h)
-    ctx.lineTo(0, h)
-    ctx.stroke()
+    // Draw backend entities
+    for (const ent of backendEntities) {
+      drawBackendEntity(ctx, ent, backendParams, backendEntities, BACKEND_COLOR, zoom)
+    }
 
-    // shapes
+    // Local shapes
     for (const s of shapes) drawShape(ctx, s, LINE, zoom)
 
-    // drawing preview
+    // Drawing preview
     if (isDrawingLine && lineStart && tempLineEnd) {
-      ctx.strokeStyle = 'rgba(0,51,153,0.5)'
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)'
       ctx.lineWidth = 2/zoom
       ctx.beginPath()
       ctx.moveTo(lineStart.x, -lineStart.y)
@@ -182,9 +254,8 @@ export default function App() {
     }
 
     ctx.restore()
-  }, [origin, zoom, shapes, isDrawingLine, lineStart, tempLineEnd])
+  }, [origin, zoom, shapes, isDrawingLine, lineStart, tempLineEnd, backendEntities, backendParams])
 
-  // --- Drawing helpers ---
   function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number, z: number, originLocal: Vec2) {
     const viewW = w / z
     const viewH = h / z
@@ -192,7 +263,7 @@ export default function App() {
     ctx.save()
     const left = - (w/2 + originLocal.x) / z
     const top = - (h/2 + originLocal.y) / z
-    ctx.strokeStyle = 'rgba(0,51,153,0.3)'
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)'
     ctx.lineWidth = 1/z
     ctx.beginPath()
     for (let x = Math.floor(left / minor) * minor; x < left + viewW; x += minor) {
@@ -231,7 +302,77 @@ export default function App() {
     }
   }
 
-  // --- Interaction ---
+  function drawBackendEntity(ctx: CanvasRenderingContext2D, ent: any, params: any[], entities: any[], color: string, z: number) {
+    ctx.strokeStyle = color
+    ctx.fillStyle = color
+    ctx.lineWidth = 3 / z
+
+    const getParamValue = (paramIdx: number) => {
+      const param = params.find(p => p.id === paramIdx)
+      return param ? param.value : 0
+    }
+
+    const getEntityPoint = (entIdx: number): Vec2 | null => {
+      const entity = entities.find(e => e.id === entIdx)
+      if (!entity || entity.type !== 0) return null
+      return {
+        x: getParamValue(entity.data.x_param),
+        y: getParamValue(entity.data.y_param)
+      }
+    }
+
+    switch (ent.type) {
+      case 0:
+        if (ent.data) {
+          const x = getParamValue(ent.data.x_param)
+          const y = getParamValue(ent.data.y_param)
+          const pointSize = 6 / z
+          ctx.fillRect(x - pointSize/2, -y - pointSize/2, pointSize, pointSize)
+        }
+        break
+      
+      case 1:
+        if (ent.data) {
+          const p1 = getEntityPoint(ent.data.p1)
+          const p2 = getEntityPoint(ent.data.p2)
+          if (p1 && p2) {
+            ctx.beginPath()
+            ctx.moveTo(p1.x, -p1.y)
+            ctx.lineTo(p2.x, -p2.y)
+            ctx.stroke()
+          }
+        }
+        break
+      
+      case 2:
+        if (ent.data) {
+          const center = getEntityPoint(ent.data.center)
+          const radius = getParamValue(ent.data.radius_param)
+          if (center) {
+            ctx.beginPath()
+            ctx.arc(center.x, -center.y, radius, 0, Math.PI * 2)
+            ctx.stroke()
+          }
+        }
+        break
+      
+      case 3:
+        if (ent.data) {
+          const p1 = getEntityPoint(ent.data.p1)
+          const p2 = getEntityPoint(ent.data.p2)
+          const p3 = getEntityPoint(ent.data.p3)
+          if (p1 && p2 && p3) {
+            ctx.beginPath()
+            ctx.moveTo(p1.x, -p1.y)
+            ctx.lineTo(p2.x, -p2.y)
+            ctx.lineTo(p3.x, -p3.y)
+            ctx.stroke()
+          }
+        }
+        break
+    }
+  }
+
   function screenToWorld(clientX: number, clientY: number) {
     const rect = canvasRef.current!.getBoundingClientRect()
     const x = (clientX - rect.left) - rect.width/2
@@ -273,7 +414,6 @@ export default function App() {
           setLineStart(p)
           setTempLineEnd(p)
         } else {
-          // Complete the line
           if (lineStart) {
             addShape({ kind: 'line', p1: lineStart, p2: p })
           }
@@ -292,7 +432,6 @@ export default function App() {
           const r = distance(arcCenter, p)
           setArcRadius(r)
         } else if (arcCenter && arcRadius) {
-          // Complete the arc - for now just create a quarter arc
           addShape({ kind: 'arc', c: arcCenter, r: arcRadius, startAngle: 0, endAngle: Math.PI/2 })
           setIsDrawingArc(false)
           setArcCenter(null)
@@ -318,7 +457,6 @@ export default function App() {
   function onMouseUp() { setIsPanning(false) }
   function onMouseLeave() { setIsPanning(false) }
 
-  // --- Editing ops ---
   function pushHistory(next: Shape[]) {
     setUndo(u => [...u, shapes])
     setRedo([])
@@ -375,16 +513,21 @@ export default function App() {
     onOpen: () => fileInputRef.current?.click(),
     onUndo: undo,
     onRedo: redo,
-    onSolve: () => call('/api/solve/quad', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ a: 1, b: 0, c: -1 }) }),
+    onSolve: () => {
+      call('/api/solve/quad', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ a: 1, b: 0, c: -1 }) })
+      setTimeout(() => fetchBackendData(), 100)
+    },
     onHelp: () => appendConsole('Help: Left-click places shapes with the selected tool. For lines, click start then end point. Middle/Right drag to pan. Wheel to zoom.'),
   }
 
   return (
-    <div style={{...styles.app, ['--ui-scale' as any]: uiScale, ['--ui-font' as any]: 'pxfont, "Courier New", monospace'}} className="blueprint">
+    <div style={{...styles.app, ['--ui-scale' as any]: uiScale}} className="blueprint">
       <input ref={fileInputRef} type="file" accept="application/json" style={{ display: 'none' }} onChange={(e) => openFromFile(e.target.files)} />
       <TopBar actions={actions} onSave={saveToFile} onBumpScale={bumpScale} />
       <div style={styles.bodyRow}>
-        <LeftPanel setTool={setTool} tool={tool} setConstraint={setConstraint} constraint={constraint} />
+        <aside style={styles.side}>
+          <LeftPanel setTool={setTool} tool={tool} setConstraint={setConstraint} constraint={constraint} />
+        </aside>
         <div style={styles.centerCol}>
           <div style={styles.viewportWrap}>
             <canvas
@@ -399,7 +542,29 @@ export default function App() {
             />
           </div>
         </div>
-        <RightPanel shapes={shapes} />
+        <div style={{ position: 'relative', width: rightPanelWidth, flexShrink: 0 }}>
+          <div 
+            className="resize-handle"
+            onMouseDown={onResizeStart}
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: '6px',
+              cursor: 'ew-resize',
+              zIndex: 10
+            }}
+          />
+          <RightPanel 
+            shapes={shapes} 
+            activeTab={activeTab} 
+            setActiveTab={setActiveTab}
+            backendEntities={backendEntities}
+            backendParams={backendParams}
+            backendConstraints={backendConstraints}
+          />
+        </div>
       </div>
       <Console out={out} />
       <StyleTag />
@@ -407,7 +572,6 @@ export default function App() {
   )
 }
 
-// --- UI components ---
 function TopBar({ actions, onSave, onBumpScale }:{ actions: { onNew: ()=>void; onOpen: ()=>void; onUndo: ()=>void; onRedo: ()=>void; onSolve: ()=>void; onHelp: ()=>void }, onSave: ()=>void, onBumpScale: (d:number)=>void }) {
   return (
     <div style={styles.topBar}>
@@ -434,7 +598,7 @@ function LeftPanel({ setTool, tool, setConstraint, constraint }:{
   constraint: 'none'|'coincident'|'parallel'|'perpendicular'|'fixed'|'measurement'|'equals'|'tangent'|'horizontal'|'vertical';
 }) {
   return (
-    <aside style={styles.side}>
+    <>
       <div style={styles.sectionHeader}>Tools</div>
       <div className="icon-grid">
         <IconButton name="point"  title="Point" onClick={() => setTool('point')} />
@@ -444,7 +608,7 @@ function LeftPanel({ setTool, tool, setConstraint, constraint }:{
         <IconButton name="delete" title="Delete last" onClick={() => setTool('delete')} />
       </div>
       <div style={styles.sectionHeader}>Active Tool</div>
-      <div style={{ padding: '6px 8px', fontSize: 12 }}>Tool: <b>{tool}</b></div>
+      <div style={{ padding: '4px 6px', fontSize: 11 }}>Tool: <b>{tool}</b></div>
       
       <div style={styles.sectionHeader}>Constraints</div>
       <div className="constraint-grid">
@@ -459,29 +623,116 @@ function LeftPanel({ setTool, tool, setConstraint, constraint }:{
         <IconButton name="vertical"      title="Vertical" onClick={() => setConstraint('vertical')} />
       </div>
       <div style={styles.sectionHeader}>Active Constraint</div>
-      <div style={{ padding: '6px 8px', fontSize: 12 }}>Constraint: <b>{constraint}</b></div>
-    </aside>
+      <div style={{ padding: '4px 6px', fontSize: 11 }}>Constraint: <b>{constraint}</b></div>
+    </>
   )
 }
 
-function RightPanel({ shapes }:{ shapes: Shape[] }) {
+function RightPanel({ shapes, activeTab, setActiveTab, backendEntities, backendParams, backendConstraints }:{ 
+  shapes: Shape[]; 
+  activeTab: 'parameters'|'entities'|'constraints'; 
+  setActiveTab: (tab: 'parameters'|'entities'|'constraints') => void;
+  backendEntities: any[];
+  backendParams: any[];
+  backendConstraints: any[];
+}) {
+  
+  const getEntityTypeName = (type: number) => {
+    const types = ['PT', 'LN', 'CR', 'AR']
+    return types[type] || 'UNKNOWN'
+  }
+
   return (
-    <aside style={styles.side}>
-      <div style={styles.sectionHeader}>Objects</div>
-      <ul style={{ padding: '4px 12px', margin: 0, listStyle: 'disc' }}>
-        {shapes.map((s, i) => (
-          <li key={i}>
-            {s.kind} #{i + 1}
-            {s.kind === 'point' && ` (${s.c.x.toFixed(1)}, ${s.c.y.toFixed(1)})`}
-            {s.kind === 'circle' && ` r=${s.r.toFixed(1)}`}
-            {s.kind === 'arc' && ` r=${s.r.toFixed(1)}`}
-          </li>
-        ))}
-        {!shapes.length && <li style={{ opacity: 0.6 }}>No objects yet</li>}
-      </ul>
-      <div style={{ padding: '6px 8px', fontSize: 12, opacity: 0.8 }}>
-        Click canvas to place shapes. For lines, click start then end point.
+    <aside style={{...styles.side, width: '100%'}}>
+      <div style={styles.tabContainer}>
+        <button 
+          className={`tab-btn ${activeTab === 'parameters' ? 'active' : ''}`}
+          onClick={() => setActiveTab('parameters')}
+        >
+          Params
+        </button>
+        <button 
+          className={`tab-btn ${activeTab === 'entities' ? 'active' : ''}`}
+          onClick={() => setActiveTab('entities')}
+        >
+          Entities
+        </button>
+        <button 
+          className={`tab-btn ${activeTab === 'constraints' ? 'active' : ''}`}
+          onClick={() => setActiveTab('constraints')}
+        >
+          Constr.
+        </button>
       </div>
+      
+      {activeTab === 'parameters' && (
+        <div style={styles.tabContent}>
+          <div style={styles.sectionHeader}>Parameters (Backend)</div>
+          <ul style={styles.listStyle}>
+            {backendParams.map((param, i) => (
+              <li key={i}>
+                x{param.id} = {param.value.toFixed(3)}
+              </li>
+            ))}
+            {!backendParams.length && <li style={{ opacity: 0.6 }}>No parameters defined</li>}
+          </ul>
+          <div style={styles.infoText}>
+            Parameters are variables that can be constrained and solved by the system.
+          </div>
+        </div>
+      )}
+      
+      {activeTab === 'entities' && (
+        <div style={styles.tabContent}>
+          <div style={styles.sectionHeader}>Entities (Backend)</div>
+          <ul style={styles.listStyle}>
+            {backendEntities.map((ent, i) => (
+              <li key={i}>
+                {getEntityTypeName(ent.type)}.{ent.id}
+                {ent.type === 0 && ent.data && ` (x:p${ent.data.x_param}, y:p${ent.data.y_param})`}
+                {ent.type === 1 && ent.data && ` (p${ent.data.p1} → p${ent.data.p2})`}
+                {ent.type === 2 && ent.data && ` (c:e${ent.data.center}, r:p${ent.data.radius_param})`}
+              </li>
+            ))}
+            {!backendEntities.length && <li style={{ opacity: 0.6 }}>No entities in backend</li>}
+          </ul>
+          
+          <div style={styles.sectionHeader}>Local Shapes</div>
+          <ul style={styles.listStyle}>
+            {shapes.map((s, i) => (
+              <li key={i}>
+                {s.kind} #{i + 1}
+                {s.kind === 'point' && ` (${s.c.x.toFixed(1)}, ${s.c.y.toFixed(1)})`}
+                {s.kind === 'circle' && ` r=${s.r.toFixed(1)}`}
+                {s.kind === 'arc' && ` r=${s.r.toFixed(1)}`}
+              </li>
+            ))}
+            {!shapes.length && <li style={{ opacity: 0.6 }}>No local shapes yet</li>}
+          </ul>
+          
+          <div style={styles.infoText}>
+            Backend entities are from the C++ solver. Local shapes are drawn in the canvas.
+          </div>
+        </div>
+      )}
+      
+      {activeTab === 'constraints' && (
+        <div style={styles.tabContent}>
+          <div style={styles.sectionHeader}>Constraints (Backend)</div>
+          <ul style={styles.listStyle}>
+            {backendConstraints.map((cons, i) => (
+              <li key={i}>
+                f_{cons.id} type={cons.type}
+                {cons.error !== undefined && ` err=${cons.error.toFixed(6)}`}
+              </li>
+            ))}
+            {!backendConstraints.length && <li style={{ opacity: 0.6 }}>No constraints applied</li>}
+          </ul>
+          <div style={styles.infoText}>
+            Select entities and apply constraints to define relationships between them.
+          </div>
+        </div>
+      )}
     </aside>
   )
 }
@@ -494,7 +745,6 @@ function Console({ out }:{ out: string }) {
     </div>
   )
 }
-
 
 function IconButton({ name, title, onClick }:{ name: IconName; title: string; onClick?: () => void }) {
   const { x, y } = spritePos(name)
@@ -513,44 +763,34 @@ function IconButton({ name, title, onClick }:{ name: IconName; title: string; on
   )
 }
 
-
-// --- Styles ---
 const styles: Record<string, React.CSSProperties> = {
-  app: { height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', background: '#fff', color: '#003399', fontFamily: 'var(--ui-font, "Courier New", monospace)' },
-  topBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 8px', borderBottom: '2px solid #003399', background: '#ffffff' },
-  logo: { fontWeight: 700, color: '#003399' },
-  topBtns: { display: 'flex', gap: 4 },
-  bodyRow: { flex: 1, display: 'grid', gridTemplateColumns: '200px 1fr 200px', minHeight: 0 },
-  side: { borderRight: '2px solid #003399', borderLeft: '2px solid #003399', background: '#ffffff', minWidth: 0, overflow: 'auto', display: 'flex', flexDirection: 'column' },
-  centerCol: { display: 'flex', flexDirection: 'column', minWidth: 0 },
-  viewportWrap: { flex: 1, position: 'relative', background: '#ffffff' },
+  app: { height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', background: '#5762c8', color: '#ffffff', fontFamily: '"Courier New", monospace' },
+  topBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '3px 6px', borderBottom: '2px solid #ffffff', background: '#5762c8' },
+  logo: { fontWeight: 700, color: '#ffffff' },
+  topBtns: { display: 'flex', gap: 3 },
+  bodyRow: { flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' },
+  side: { width: 200, borderRight: '2px solid #ffffff', borderLeft: '2px solid #ffffff', background: '#5762c8', minWidth: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', flexShrink: 0 },
+  centerCol: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, overflow: 'hidden' },
+  viewportWrap: { flex: 1, position: 'relative', background: '#5762c8' },
   canvas: { width: '100%', height: '100%', display: 'block', cursor: 'crosshair' },
-  console: { height: 110, borderTop: '2px solid #003399', background: '#fff', display: 'flex', flexDirection: 'column' },
-  sectionHeader: { padding: '4px 8px', borderBottom: '2px solid #003399', background: '#ffffff', color: '#003399', fontSize: 12, fontWeight: 'bold' },
+  console: { height: 110, borderTop: '2px solid #ffffff', background: '#5762c8', display: 'flex', flexDirection: 'column' },
+  sectionHeader: { padding: '3px 6px', borderBottom: '2px solid #ffffff', background: '#5762c8', color: '#ffffff', fontSize: 11, fontWeight: 'bold' },
+  tabContainer: { display: 'flex', background: '#5762c8' },
+  tabContent: { display: 'flex', flexDirection: 'column', flex: 1 },
+  listStyle: { padding: '3px 10px', margin: 0, listStyle: 'disc', fontSize: 11 },
+  infoText: { padding: '4px 6px', fontSize: 10, opacity: 0.8 },
 }
 
 function StyleTag() {
   return (
     <style>{`
-      @font-face {
-        font-family: 'pxfont';
-        src: url('/fonts/pxfont.woff2') format('woff2');
-        font-weight: 400 800;
-        font-style: normal;
-        font-display: swap;
-      }
-
       .blueprint {
         --ui-scale: var(--ui-scale, 1);
-        --ui-font: var(--ui-font, pxfont, "Courier New", monospace);
-        font-family: var(--ui-font);
-        font-size: calc(12px * var(--ui-scale));
-        color:#003399;
+        font-size: calc(11px * var(--ui-scale));
+        color: #ffffff;
       }
 
-      .blueprint { --frame-url: url('/icons/frame9-blue.png'); --frame-url-hover: url('/icons/frame9-blue-hover.png'); --frame-slice: 6; --frame-width: 6; }
-
-      :root .blueprint { --btn: calc(32px * var(--ui-scale)); --icon: calc(18px * var(--ui-scale)); }
+      :root .blueprint { --btn: calc(32px * var(--ui-scale)); }
 
       .icon-btn {
         width: var(--btn); 
@@ -585,10 +825,46 @@ function StyleTag() {
         pointer-events: none;
       }
 
-      .console-pre { margin:0; padding: calc(6px * var(--ui-scale)); flex:1; color:#003399; background:transparent; white-space:pre-wrap; overflow:auto; font-size: 1em }
-      .icon-grid { display:grid; grid-template-columns: repeat(3, var(--btn)); justify-content:start; gap: calc(6px * var(--ui-scale)); padding: calc(6px * var(--ui-scale)); }
-      .constraint-grid { display:grid; grid-template-columns: repeat(3, var(--btn)); justify-content:start; gap: calc(4px * var(--ui-scale)); padding: calc(6px * var(--ui-scale)); }
-      .sep { width: calc(8px * var(--ui-scale)); }
+      .console-pre { margin:0; padding: calc(4px * var(--ui-scale)); flex:1; color:#ffffff; background:transparent; white-space:pre-wrap; overflow:auto; font-size: 1em }
+      .icon-grid { display:grid; grid-template-columns: repeat(3, var(--btn)); justify-content:start; gap: calc(4px * var(--ui-scale)); padding: calc(4px * var(--ui-scale)); }
+      .constraint-grid { display:grid; grid-template-columns: repeat(3, var(--btn)); justify-content:start; gap: calc(3px * var(--ui-scale)); padding: calc(4px * var(--ui-scale)); }
+      .sep { width: calc(6px * var(--ui-scale)); }
+      
+      .tab-btn {
+        flex: 1;
+        padding: calc(3px * var(--ui-scale)) calc(3px * var(--ui-scale));
+        background: rgba(255,255,255,0.1);
+        border: calc(1px * var(--ui-scale)) solid #ffffff;
+        border-bottom: none;
+        color: #ffffff;
+        cursor: pointer;
+        font-family: "Courier New", monospace;
+        font-size: calc(9px * var(--ui-scale));
+        transition: background-color 0.1s ease;
+      }
+      .tab-btn:hover {
+        background: rgba(255,255,255,0.2);
+      }
+      .tab-btn.active {
+        background: rgba(255,255,255,0.15);
+        font-weight: bold;
+      }
+      
+      .resize-handle {
+        background: transparent;
+        transition: background-color 0.2s ease;
+        pointer-events: auto;
+      }
+      .resize-handle:hover {
+        background: rgba(255, 255, 255, 0.2);
+      }
+      
+      body.resizing * {
+        pointer-events: none !important;
+      }
+      body.resizing .resize-handle {
+        pointer-events: auto !important;
+      }
     `}</style>
   )
 }
