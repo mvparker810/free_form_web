@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { getSketch, FreeFormSketch, EntityType } from './freeform-wasm'
 
 // --- Types ---
 type Vec2 = { x: number; y: number }
@@ -379,6 +380,10 @@ export default function App() {
   const [out, setOut] = useState<string>('ready')
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
+  // WASM sketch instance
+  const [sketch, setSketch] = useState<FreeFormSketch | null>(null)
+  const [wasmReady, setWasmReady] = useState(false)
+
   const [uiScale, setUiScale] = useState<number>(1.4)
   const bumpScale = (d: number) => setUiScale(s => clamp(Math.round((s + d) * 10) / 10, 0.8, 2.5))
 
@@ -443,45 +448,68 @@ export default function App() {
     }
   }
 
+  // Initialize WASM module
+  useEffect(() => {
+    async function initWasm() {
+      try {
+        appendConsole('Initializing WASM module...')
+        const wasmSketch = await getSketch()
+        setSketch(wasmSketch)
+        setWasmReady(true)
+        appendConsole('WASM module initialized successfully')
+
+        // Initialize with some test data
+        wasmSketch.addPoint(4, -4)
+        wasmSketch.addPoint(12, -30)
+        wasmSketch.addLine(0, 0, 10, 10)
+        appendConsole(`Created initial sketch with ${wasmSketch.getAllEntities().length} entities`)
+      } catch (error) {
+        appendConsole(`WASM initialization failed: ${error}`)
+      }
+    }
+    initWasm()
+  }, [])
+
   useEffect(() => { appendConsole(runSelfTests()) }, [])
 
   async function fetchBackendData() {
+    if (!sketch || !wasmReady) {
+      appendConsole('! WASM not ready')
+      return
+    }
+
     try {
-      const [entitiesRes, paramsRes, constraintsRes] = await Promise.all([
-        fetch('/api/sketch/entities'),
-        fetch('/api/sketch/parameters'),
-        fetch('/api/sketch/constraints')
-      ])
+      const entities = sketch.getAllEntities()
+      const params = sketch.getAllParameters()
 
-      if (entitiesRes.ok) {
-        const entities = await entitiesRes.json()
-        setBackendEntities(entities)
-        appendConsole(`Fetched ${entities.length} entities: ${JSON.stringify(entities)}`)
-      } else {
-        appendConsole(`! Entities fetch failed: ${entitiesRes.status}`)
-      }
+      // Map WASM entities to match backend format
+      const mappedEntities = entities.map(e => ({
+        id: e.id,
+        gen: 0, // WASM doesn't use generation numbers
+        type: e.type,
+        data: e.data
+      }))
 
-      if (paramsRes.ok) {
-        const params = await paramsRes.json()
-        setBackendParams(params)
-        appendConsole(`Fetched ${params.length} parameters: ${JSON.stringify(params)}`)
-      } else {
-        appendConsole(`! Parameters fetch failed: ${paramsRes.status}`)
-      }
+      // Map WASM parameters to match backend format
+      const mappedParams = params.map(p => ({
+        id: p.id,
+        gen: 0,
+        value: p.value
+      }))
 
-      if (constraintsRes.ok) {
-        const constraints = await constraintsRes.json()
-        setBackendConstraints(constraints)
-        appendConsole(`Fetched ${constraints.length} constraints`)
-      } else {
-        appendConsole(`! Constraints fetch failed: ${constraintsRes.status}`)
-      }
+      setBackendEntities(mappedEntities)
+      setBackendParams(mappedParams)
+      setBackendConstraints([]) // Constraints not yet implemented in WASM wrapper
+
+      appendConsole(`WASM data: ${entities.length} entities, ${params.length} parameters`)
     } catch (e: any) {
-      appendConsole(`! Failed to fetch backend data: ${e?.message ?? e}`)
+      appendConsole(`! Failed to fetch WASM data: ${e?.message ?? e}`)
     }
   }
 
   async function updateBackendPoint(entityIndex: number, newPosition: Vec2) {
+    if (!sketch || !wasmReady) return
+
     const entity = backendEntities[entityIndex]
     if (!entity || entity.type !== 0 || !entity.data) return
 
@@ -489,137 +517,98 @@ export default function App() {
     const yParamId = entity.data.y_param
 
     try {
-      // Update both x and y parameters
-      const updatePromises = [
-        fetch(`/api/sketch/parameters/${xParamId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ value: newPosition.x })
-        }),
-        fetch(`/api/sketch/parameters/${yParamId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ value: newPosition.y })
-        })
-      ]
+      // Update both x and y parameters in WASM
+      sketch.setParameter(xParamId, newPosition.x)
+      sketch.setParameter(yParamId, newPosition.y)
 
-      const [xRes, yRes] = await Promise.all(updatePromises)
+      // Solve the sketch
+      sketch.solve(0.01, 8)
 
-      if (xRes.ok && yRes.ok) {
-        // Refresh backend data to get updated values
-        fetchBackendData()
-      } else {
-        appendConsole(`! Failed to update point parameters: ${xRes.status}, ${yRes.status}`)
-      }
+      // Refresh data
+      fetchBackendData()
+      appendConsole(`Updated point at entity ${entityIndex}`)
     } catch (e: any) {
-      appendConsole(`! Error updating backend point: ${e?.message ?? e}`)
+      appendConsole(`! Error updating WASM point: ${e?.message ?? e}`)
     }
   }
 
   async function addBackendPoint(position: Vec2) {
-    try {
-      const response = await fetch('/api/sketch/entities/point', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ x: position.x, y: position.y })
-      })
+    if (!sketch || !wasmReady) {
+      appendConsole('! WASM not ready')
+      return
+    }
 
-      if (response.ok) {
-        const result = await response.json()
-        appendConsole(`✓ Created point at (${position.x}, ${position.y})`)
-        // Refresh backend data to get the new point
-        fetchBackendData()
-      } else {
-        const errorText = await response.text()
-        appendConsole(`! Failed to create point: ${response.status} ${errorText}`)
-      }
+    try {
+      const entityId = sketch.addPoint(position.x, position.y)
+      sketch.solve(0.01, 8)
+      appendConsole(`✓ Created point at (${position.x}, ${position.y}) with entity ID ${entityId}`)
+      fetchBackendData()
     } catch (e: any) {
-      appendConsole(`! Error creating backend point: ${e?.message ?? e}`)
+      appendConsole(`! Error creating WASM point: ${e?.message ?? e}`)
     }
   }
 
   async function addBackendLine(p1: Vec2, p2: Vec2) {
-    try {
-      const response = await fetch('/api/sketch/entities/line', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y })
-      })
+    if (!sketch || !wasmReady) {
+      appendConsole('! WASM not ready')
+      return
+    }
 
-      if (response.ok) {
-        const result = await response.json()
-        appendConsole(`✓ Created line from (${p1.x}, ${p1.y}) to (${p2.x}, ${p2.y})`)
-        // Refresh backend data to get the new line
-        fetchBackendData()
-      } else {
-        const errorText = await response.text()
-        appendConsole(`! Failed to create line: ${response.status} ${errorText}`)
-      }
+    try {
+      const entityId = sketch.addLine(p1.x, p1.y, p2.x, p2.y)
+      sketch.solve(0.01, 8)
+      appendConsole(`✓ Created line from (${p1.x}, ${p1.y}) to (${p2.x}, ${p2.y}) with entity ID ${entityId}`)
+      fetchBackendData()
     } catch (e: any) {
-      appendConsole(`! Error creating backend line: ${e?.message ?? e}`)
+      appendConsole(`! Error creating WASM line: ${e?.message ?? e}`)
     }
   }
 
   async function addBackendCircle(center: Vec2, radius: number) {
-    try {
-      const response = await fetch('/api/sketch/entities/circle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ x: center.x, y: center.y, radius: radius })
-      })
+    if (!sketch || !wasmReady) {
+      appendConsole('! WASM not ready')
+      return
+    }
 
-      if (response.ok) {
-        const result = await response.json()
-        appendConsole(`✓ Created circle at (${center.x}, ${center.y}) with radius ${radius}`)
-        // Refresh backend data to get the new circle
-        fetchBackendData()
-      } else {
-        const errorText = await response.text()
-        appendConsole(`! Failed to create circle: ${response.status} ${errorText}`)
-      }
+    try {
+      const entityId = sketch.addCircle(center.x, center.y, radius)
+      sketch.solve(0.01, 8)
+      appendConsole(`✓ Created circle at (${center.x}, ${center.y}) with radius ${radius}, entity ID ${entityId}`)
+      fetchBackendData()
     } catch (e: any) {
-      appendConsole(`! Error creating backend circle: ${e?.message ?? e}`)
+      appendConsole(`! Error creating WASM circle: ${e?.message ?? e}`)
     }
   }
 
   async function updateCircleRadius(entityIndex: number, newRadius: number) {
+    if (!sketch || !wasmReady) return
+
     const entity = backendEntities[entityIndex]
     if (!entity || entity.type !== 2 || !entity.data) return
 
     const radiusParamId = entity.data.radius_param
 
     try {
-      const response = await fetch(`/api/sketch/parameters/${radiusParamId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value: newRadius })
-      })
-
-      if (response.ok) {
-        // Refresh backend data to get updated values
-        fetchBackendData()
-      } else {
-        appendConsole(`! Failed to update circle radius: ${response.status}`)
-      }
+      sketch.setParameter(radiusParamId, newRadius)
+      sketch.solve(0.01, 8)
+      fetchBackendData()
+      appendConsole(`Updated circle radius to ${newRadius}`)
     } catch (e: any) {
       appendConsole(`! Error updating circle radius: ${e?.message ?? e}`)
     }
   }
 
   async function updateParameterValue(paramId: number, newValue: number) {
-    try {
-      const response = await fetch(`/api/sketch/parameters/${paramId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value: newValue })
-      })
+    if (!sketch || !wasmReady) {
+      appendConsole('! WASM not ready')
+      return
+    }
 
-      if (response.ok) {
-        fetchBackendData()
-        appendConsole(`✓ Updated parameter ${paramId} to ${newValue}`)
-      } else {
-        appendConsole(`! Failed to update parameter ${paramId}: ${response.status}`)
-      }
+    try {
+      sketch.setParameter(paramId, newValue)
+      sketch.solve(0.01, 8)
+      fetchBackendData()
+      appendConsole(`✓ Updated parameter ${paramId} to ${newValue}`)
     } catch (e: any) {
       appendConsole(`! Error updating parameter: ${e?.message ?? e}`)
     }

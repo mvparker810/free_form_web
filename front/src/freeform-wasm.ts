@@ -27,12 +27,14 @@ export interface FreeFormModule extends EmscriptenModule {
 
 declare function createFreeFormModule(): Promise<FreeFormModule>
 
-export enum EntityType {
-  POINT = 0,
-  LINE = 1,
-  CIRCLE = 2,
-  ARC = 3
-}
+export const EntityType = {
+  POINT: 0,
+  LINE: 1,
+  CIRCLE: 2,
+  ARC: 3
+} as const
+
+export type EntityType = typeof EntityType[keyof typeof EntityType]
 
 export interface Parameter {
   id: number
@@ -51,8 +53,42 @@ export class FreeFormSketch {
 
   async initialize(p_cap = 1024, e_cap = 256, c_cap = 128) {
     // @ts-ignore - Import WASM module
-    const createModule = (await import('/freeform.js')).default
-    this.module = await createModule()
+    const baseUrl = import.meta.env.BASE_URL
+    const modulePath = `${baseUrl}freeform.js`
+
+    // Load the module dynamically
+    const response = await fetch(modulePath)
+    const moduleText = await response.text()
+
+    // Create a script element to load the module
+    const createModule = await new Promise<any>((resolve) => {
+      const script = document.createElement('script')
+      script.textContent = moduleText
+      script.onload = () => {
+        // @ts-ignore
+        resolve(window.createFreeFormModule)
+      }
+      document.head.appendChild(script)
+      // @ts-ignore
+      if (window.createFreeFormModule) {
+        // @ts-ignore
+        resolve(window.createFreeFormModule)
+      }
+    })
+
+    this.module = await createModule({
+      locateFile: (path: string) => {
+        if (path.endsWith('.wasm')) {
+          return `${baseUrl}${path}`
+        }
+        return path
+      }
+    })
+
+    if (!this.module) {
+      throw new Error('Failed to initialize WASM module')
+    }
+
     this.sketchPtr = this.module._wasm_sketch_create(p_cap, e_cap, c_cap)
   }
 
@@ -141,7 +177,7 @@ export class FreeFormSketch {
     for (let i = 0; i < actualCount; i++) {
       const entity: Entity = {
         id: ids[i],
-        type: types[i]
+        type: types[i] as EntityType
       }
 
       // Get type-specific data
