@@ -3,11 +3,6 @@ import { useEffect, useRef, useState } from 'react'
 // --- Types ---
 type Vec2 = { x: number; y: number }
 
-type Shape =
-  | { kind: 'point'; c: Vec2 }
-  | { kind: 'line'; p1: Vec2; p2: Vec2 }
-  | { kind: 'circle'; c: Vec2; r: number }
-  | { kind: 'arc'; c: Vec2; r: number; startAngle: number; endAngle: number }
 
 type IconName =
   | 'new' | 'open' | 'undo' | 'redo' | 'solve' | 'help'
@@ -49,6 +44,308 @@ function snapGrid(base: number, z: number) {
 function distance(p1: Vec2, p2: Vec2): number {
   return Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2)
 }
+
+
+function findBackendPointAt(entities: any[], params: any[], point: Vec2, tolerance: number = 10): { type: 'backend', index: number } | null {
+  const getParamValue = (paramIdx: number) => {
+    const param = params.find(p => p.id === paramIdx)
+    return param ? param.value : 0
+  }
+
+  for (let i = 0; i < entities.length; i++) {
+    const entity = entities[i]
+    if (entity.type === 0 && entity.data) { // type 0 = point
+      const x = getParamValue(entity.data.x_param)
+      const y = getParamValue(entity.data.y_param)
+      const dist = distance({ x, y }, point)
+      if (dist <= tolerance) {
+        return { type: 'backend', index: i }
+      }
+    }
+  }
+  return null
+}
+
+function findCircleBorderAt(entities: any[], params: any[], point: Vec2, tolerance: number = 5): { entityIndex: number, center: Vec2, radius: number } | null {
+  const getParamValue = (paramIdx: number) => {
+    const param = params.find(p => p.id === paramIdx)
+    return param ? param.value : 0
+  }
+
+  for (let i = 0; i < entities.length; i++) {
+    const entity = entities[i]
+    if (entity.type === 2 && entity.data) { // type 2 = circle
+      // Get center point entity
+      const centerEntity = entities.find(e => e.id === entity.data.center)
+      if (!centerEntity || !centerEntity.data) continue
+
+      const centerX = getParamValue(centerEntity.data.x_param)
+      const centerY = getParamValue(centerEntity.data.y_param)
+      const radius = getParamValue(entity.data.radius_param)
+
+      const center = { x: centerX, y: centerY }
+      const distanceFromCenter = distance(center, point)
+      const borderDistance = Math.abs(distanceFromCenter - radius)
+
+      if (borderDistance <= tolerance) {
+        return { entityIndex: i, center, radius }
+      }
+    }
+  }
+  return null
+}
+
+function snapToPixelGrid(x: number, y: number, pixelSize: number): [number, number] {
+  return [
+    Math.floor(x / pixelSize) * pixelSize + pixelSize / 2,
+    Math.floor(y / pixelSize) * pixelSize + pixelSize / 2
+  ]
+}
+
+function quantizeColor(color: string): string {
+  // Convert to limited palette for true pixel art look
+  if (color === '#ffffff') return '#ffffff' // Keep white
+  if (color === '#ff6699') return '#ff0066' // Quantize pink
+  if (color.includes('rgba')) {
+    // For transparent colors, use solid equivalents
+    return '#cccccc'
+  }
+  return color
+}
+
+// Entity sprite system
+const ENTITY_SPRITE_URL = '/icons/entities.png'
+const ENTITY_SPRITE_SIZE = 8 // 8x8 sprites
+const ENTITY_SPRITE_COLS = 8 // 8 columns
+let entitySpriteImage: HTMLImageElement | null = null
+
+function loadEntitySprite() {
+  if (!entitySpriteImage) {
+    entitySpriteImage = new Image()
+    entitySpriteImage.src = ENTITY_SPRITE_URL
+  }
+  return entitySpriteImage
+}
+
+function drawEntitySprite(ctx: CanvasRenderingContext2D, x: number, y: number, spriteIndex: number, scale: number = 1) {
+  const img = loadEntitySprite()
+  if (!img || !img.complete) return false // Return false if not loaded
+
+  const spriteX = (spriteIndex % ENTITY_SPRITE_COLS) * ENTITY_SPRITE_SIZE
+  const spriteY = Math.floor(spriteIndex / ENTITY_SPRITE_COLS) * ENTITY_SPRITE_SIZE
+
+  const size = ENTITY_SPRITE_SIZE * scale
+
+  try {
+    // Save current smoothing setting
+    const prevSmoothing = ctx.imageSmoothingEnabled
+    ctx.imageSmoothingEnabled = false // Ensure crisp sprite rendering
+
+    ctx.drawImage(
+      img,
+      spriteX, spriteY, ENTITY_SPRITE_SIZE, ENTITY_SPRITE_SIZE,
+      x - size/2, y - size/2, size, size
+    )
+
+    // Restore smoothing setting
+    ctx.imageSmoothingEnabled = prevSmoothing
+    return true
+  } catch (e) {
+    return false // Fallback if drawing fails
+  }
+}
+
+function drawTexturedLine(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, scale: number = 1) {
+  const img = loadEntitySprite()
+  if (!img || !img.complete) return false // Return false if not loaded
+
+  const dx = x2 - x1
+  const dy = y2 - y1
+  const length = Math.sqrt(dx * dx + dy * dy)
+  const angle = Math.atan2(dy, dx)
+
+  // Fixed texture density - always use base sprite size regardless of scale
+  const baseTextureSize = ENTITY_SPRITE_SIZE
+  const spriteSize = ENTITY_SPRITE_SIZE * scale
+
+  // Calculate exact number of texture repeats (can be fractional)
+  const textureRepeats = length / baseTextureSize
+  const numSegments = Math.ceil(textureRepeats)
+
+  try {
+    const prevSmoothing = ctx.imageSmoothingEnabled
+    // Keep smoothing disabled for crisp pixels
+    ctx.imageSmoothingEnabled = false
+
+    // Use sprite index 1 (next to point sprite)
+    const spriteX = (1 % ENTITY_SPRITE_COLS) * ENTITY_SPRITE_SIZE
+    const spriteY = Math.floor(1 / ENTITY_SPRITE_COLS) * ENTITY_SPRITE_SIZE
+
+    ctx.save()
+    ctx.translate(x1, y1)
+    ctx.rotate(angle)
+
+    // Draw segments with consistent texture density
+    for (let i = 0; i < numSegments; i++) {
+      // Calculate position based on texture repeats, not segments
+      const segmentStart = (i / textureRepeats) * length
+      const segmentEnd = Math.min(((i + 1) / textureRepeats) * length, length)
+      const segmentWidth = segmentEnd - segmentStart
+
+      // Calculate how much of the source texture to use
+      const textureProgress = (i + 1) / textureRepeats
+      const isLastSegment = i === numSegments - 1
+      const sourceWidth = isLastSegment && textureProgress > 1
+        ? ENTITY_SPRITE_SIZE * (1 - (textureProgress - 1))
+        : ENTITY_SPRITE_SIZE
+
+      // Add small overlap to prevent seams
+      const overlap = Math.min(1 * scale, segmentWidth * 0.1)
+      const drawStart = i === 0 ? segmentStart : segmentStart - overlap
+      const drawWidth = i === 0 ? segmentWidth + overlap :
+                       isLastSegment ? segmentWidth + overlap : segmentWidth + (2 * overlap)
+
+      ctx.drawImage(
+        img,
+        spriteX, spriteY, sourceWidth, ENTITY_SPRITE_SIZE,  // Source: potentially partial width
+        drawStart, -spriteSize/2, drawWidth, spriteSize     // Dest: with overlap
+      )
+    }
+
+    ctx.restore()
+    ctx.imageSmoothingEnabled = prevSmoothing
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+function drawTexturedCircle(ctx: CanvasRenderingContext2D, centerX: number, centerY: number, radius: number, scale: number = 1, zoom: number = 1) {
+  const img = loadEntitySprite()
+  if (!img || !img.complete) return false // Return false if not loaded
+
+  const lineWidth = ENTITY_SPRITE_SIZE * scale
+
+  try {
+    const prevSmoothing = ctx.imageSmoothingEnabled
+
+    // Use sprite index 1 (same as line texture)
+    const spriteX = (1 % ENTITY_SPRITE_COLS) * ENTITY_SPRITE_SIZE
+    const spriteY = Math.floor(1 / ENTITY_SPRITE_COLS) * ENTITY_SPRITE_SIZE
+
+    // Use optimized resolution buffer - higher when zoomed in, capped to prevent slowdown
+    const bufferScale = Math.min(16, Math.max(4, 8 * zoom)) // Scale up when zoomed in, cap at 16x
+    const bufferSize = Math.ceil((radius + lineWidth) * 2 * bufferScale)
+    const bufferCanvas = document.createElement('canvas')
+    bufferCanvas.width = bufferSize
+    bufferCanvas.height = bufferSize
+    const bufferCtx = bufferCanvas.getContext('2d')!
+    bufferCtx.imageSmoothingEnabled = true // Enable smoothing for smooth texture
+
+    const bufferCenter = bufferSize / 2
+    const scaledRadius = radius * bufferScale
+    const scaledLineWidth = lineWidth * bufferScale
+
+    // Extract sprite data once
+    const tempCanvas = document.createElement('canvas')
+    tempCanvas.width = ENTITY_SPRITE_SIZE
+    tempCanvas.height = ENTITY_SPRITE_SIZE
+    const tempCtx = tempCanvas.getContext('2d')!
+    tempCtx.drawImage(img, spriteX, spriteY, ENTITY_SPRITE_SIZE, ENTITY_SPRITE_SIZE, 0, 0, ENTITY_SPRITE_SIZE, ENTITY_SPRITE_SIZE)
+    const spriteImageData = tempCtx.getImageData(0, 0, ENTITY_SPRITE_SIZE, ENTITY_SPRITE_SIZE)
+
+    // Create output image data
+    const outputImageData = bufferCtx.createImageData(bufferSize, bufferSize)
+    const outputData = outputImageData.data
+    const spriteData = spriteImageData.data
+
+    // Draw radially mapped texture with super-smooth sampling
+    for (let y = 0; y < bufferSize; y++) {
+      for (let x = 0; x < bufferSize; x++) {
+        const dx = x - bufferCenter
+        const dy = y - bufferCenter
+        const distance = Math.sqrt(dx * dx + dy * dy)
+
+        // Check if pixel is within the circle ring
+        if (distance >= scaledRadius - scaledLineWidth/2 && distance <= scaledRadius + scaledLineWidth/2) {
+          // Calculate angle (0 to 2π) with smooth continuous mapping
+          let angle = Math.atan2(dy, dx)
+          if (angle < 0) angle += 2 * Math.PI
+
+          // Map angle to horizontal texture coordinate with smooth partial repeating
+          const circumference = 2 * Math.PI * (scaledRadius / bufferScale)
+          const textureRepeats = circumference / (ENTITY_SPRITE_SIZE * scale)
+          const textureU = (angle / (2 * Math.PI)) * ENTITY_SPRITE_SIZE * textureRepeats
+
+          // Map distance to vertical texture coordinate
+          const distanceFromInner = distance - (scaledRadius - scaledLineWidth/2)
+          const textureV = (distanceFromInner / scaledLineWidth) * ENTITY_SPRITE_SIZE
+
+          // Smooth texture sampling with slight interpolation for anti-aliasing
+          const sampleTexture = (u: number, v: number) => {
+            // Ensure continuous wrapping for U coordinate
+            u = ((u % ENTITY_SPRITE_SIZE) + ENTITY_SPRITE_SIZE) % ENTITY_SPRITE_SIZE
+            // Clamp V coordinate
+            v = Math.max(0, Math.min(ENTITY_SPRITE_SIZE - 0.001, v))
+
+            // Use minimal bilinear interpolation for smooth edges but crisp texture
+            const u1 = Math.floor(u) % ENTITY_SPRITE_SIZE
+            const u2 = (u1 + 1) % ENTITY_SPRITE_SIZE
+            const v1 = Math.floor(v)
+            const v2 = Math.min(ENTITY_SPRITE_SIZE - 1, v1 + 1)
+
+            const uFrac = u - Math.floor(u)
+            const vFrac = v - Math.floor(v)
+
+            const getPixel = (pixelU: number, pixelV: number) => {
+              const idx = (pixelV * ENTITY_SPRITE_SIZE + pixelU) * 4
+              return {
+                r: spriteData[idx],
+                g: spriteData[idx + 1],
+                b: spriteData[idx + 2],
+                a: spriteData[idx + 3]
+              }
+            }
+
+            // Use nearest-neighbor for crisp texture pixels
+            const nearestU = Math.round(u) % ENTITY_SPRITE_SIZE
+            const nearestV = Math.max(0, Math.min(ENTITY_SPRITE_SIZE - 1, Math.round(v)))
+
+            return getPixel(nearestU, nearestV)
+          }
+
+          const final = sampleTexture(textureU, textureV)
+
+          // Set final pixel
+          const outputIndex = (y * bufferSize + x) * 4
+          outputData[outputIndex] = final.r
+          outputData[outputIndex + 1] = final.g
+          outputData[outputIndex + 2] = final.b
+          outputData[outputIndex + 3] = final.a
+        }
+      }
+    }
+
+    // Draw the result
+    bufferCtx.putImageData(outputImageData, 0, 0)
+
+    // Use selective smoothing - smooth for anti-aliasing but preserve texture crispness
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = 'high'
+    const finalSize = (radius + lineWidth) * 2
+    ctx.drawImage(bufferCanvas,
+      centerX - finalSize/2, centerY - finalSize/2,
+      finalSize, finalSize)
+
+    ctx.imageSmoothingEnabled = prevSmoothing
+    return true
+  } catch (e) {
+    console.error('Circle texture error:', e)
+    return false
+  }
+}
+
+
 
 // --- Runtime self-tests ---
 function runSelfTests(): string {
@@ -93,7 +390,6 @@ export default function App() {
 
   const [tool, setTool] = useState<'select'|'point'|'line'|'circle'|'arc'|'delete'>('select')
   const [constraint, setConstraint] = useState<'none'|'coincident'|'parallel'|'perpendicular'|'fixed'|'measurement'|'equals'|'tangent'|'horizontal'|'vertical'>('none')
-  const [shapes, setShapes] = useState<Shape[]>([])
   
   const [activeTab, setActiveTab] = useState<'parameters'|'entities'|'constraints'>('entities')
   
@@ -114,8 +410,22 @@ export default function App() {
   const [arcCenter, setArcCenter] = useState<Vec2 | null>(null)
   const [arcRadius, setArcRadius] = useState<number | null>(null)
 
-  const [undoStack, setUndo] = useState<Shape[][]>([])
-  const [redoStack, setRedo] = useState<Shape[][]>([])
+  const [isDragging, setIsDragging] = useState(false)
+  const [draggedPoint, setDraggedPoint] = useState<{ type: 'local' | 'backend', index: number } | null>(null)
+  const [dragStartPos, setDragStartPos] = useState<Vec2 | null>(null)
+  const [dragCurrentPos, setDragCurrentPos] = useState<Vec2 | null>(null)
+
+  const [hoveredPoint, setHoveredPoint] = useState<{ type: 'backend', index: number } | null>(null)
+  const [isEditingCircle, setIsEditingCircle] = useState(false)
+  const [editedCircle, setEditedCircle] = useState<{ entityIndex: number, initialRadius: number } | null>(null)
+
+
+
+
+
+
+  const [isPixelated, setIsPixelated] = useState<boolean>(false)
+  const [currentFont, setCurrentFont] = useState<string>('RetroGaming')
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -142,7 +452,7 @@ export default function App() {
         fetch('/api/sketch/parameters'),
         fetch('/api/sketch/constraints')
       ])
-      
+
       if (entitiesRes.ok) {
         const entities = await entitiesRes.json()
         setBackendEntities(entities)
@@ -150,7 +460,7 @@ export default function App() {
       } else {
         appendConsole(`! Entities fetch failed: ${entitiesRes.status}`)
       }
-      
+
       if (paramsRes.ok) {
         const params = await paramsRes.json()
         setBackendParams(params)
@@ -158,7 +468,7 @@ export default function App() {
       } else {
         appendConsole(`! Parameters fetch failed: ${paramsRes.status}`)
       }
-      
+
       if (constraintsRes.ok) {
         const constraints = await constraintsRes.json()
         setBackendConstraints(constraints)
@@ -168,6 +478,150 @@ export default function App() {
       }
     } catch (e: any) {
       appendConsole(`! Failed to fetch backend data: ${e?.message ?? e}`)
+    }
+  }
+
+  async function updateBackendPoint(entityIndex: number, newPosition: Vec2) {
+    const entity = backendEntities[entityIndex]
+    if (!entity || entity.type !== 0 || !entity.data) return
+
+    const xParamId = entity.data.x_param
+    const yParamId = entity.data.y_param
+
+    try {
+      // Update both x and y parameters
+      const updatePromises = [
+        fetch(`/api/sketch/parameters/${xParamId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: newPosition.x })
+        }),
+        fetch(`/api/sketch/parameters/${yParamId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: newPosition.y })
+        })
+      ]
+
+      const [xRes, yRes] = await Promise.all(updatePromises)
+
+      if (xRes.ok && yRes.ok) {
+        // Refresh backend data to get updated values
+        fetchBackendData()
+      } else {
+        appendConsole(`! Failed to update point parameters: ${xRes.status}, ${yRes.status}`)
+      }
+    } catch (e: any) {
+      appendConsole(`! Error updating backend point: ${e?.message ?? e}`)
+    }
+  }
+
+  async function addBackendPoint(position: Vec2) {
+    try {
+      const response = await fetch('/api/sketch/entities/point', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ x: position.x, y: position.y })
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+        appendConsole(`✓ Created point at (${position.x}, ${position.y})`)
+        // Refresh backend data to get the new point
+        fetchBackendData()
+      } else {
+        const errorText = await response.text()
+        appendConsole(`! Failed to create point: ${response.status} ${errorText}`)
+      }
+    } catch (e: any) {
+      appendConsole(`! Error creating backend point: ${e?.message ?? e}`)
+    }
+  }
+
+  async function addBackendLine(p1: Vec2, p2: Vec2) {
+    try {
+      const response = await fetch('/api/sketch/entities/line', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y })
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+        appendConsole(`✓ Created line from (${p1.x}, ${p1.y}) to (${p2.x}, ${p2.y})`)
+        // Refresh backend data to get the new line
+        fetchBackendData()
+      } else {
+        const errorText = await response.text()
+        appendConsole(`! Failed to create line: ${response.status} ${errorText}`)
+      }
+    } catch (e: any) {
+      appendConsole(`! Error creating backend line: ${e?.message ?? e}`)
+    }
+  }
+
+  async function addBackendCircle(center: Vec2, radius: number) {
+    try {
+      const response = await fetch('/api/sketch/entities/circle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ x: center.x, y: center.y, radius: radius })
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+        appendConsole(`✓ Created circle at (${center.x}, ${center.y}) with radius ${radius}`)
+        // Refresh backend data to get the new circle
+        fetchBackendData()
+      } else {
+        const errorText = await response.text()
+        appendConsole(`! Failed to create circle: ${response.status} ${errorText}`)
+      }
+    } catch (e: any) {
+      appendConsole(`! Error creating backend circle: ${e?.message ?? e}`)
+    }
+  }
+
+  async function updateCircleRadius(entityIndex: number, newRadius: number) {
+    const entity = backendEntities[entityIndex]
+    if (!entity || entity.type !== 2 || !entity.data) return
+
+    const radiusParamId = entity.data.radius_param
+
+    try {
+      const response = await fetch(`/api/sketch/parameters/${radiusParamId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: newRadius })
+      })
+
+      if (response.ok) {
+        // Refresh backend data to get updated values
+        fetchBackendData()
+      } else {
+        appendConsole(`! Failed to update circle radius: ${response.status}`)
+      }
+    } catch (e: any) {
+      appendConsole(`! Error updating circle radius: ${e?.message ?? e}`)
+    }
+  }
+
+  async function updateParameterValue(paramId: number, newValue: number) {
+    try {
+      const response = await fetch(`/api/sketch/parameters/${paramId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: newValue })
+      })
+
+      if (response.ok) {
+        fetchBackendData()
+        appendConsole(`✓ Updated parameter ${paramId} to ${newValue}`)
+      } else {
+        appendConsole(`! Failed to update parameter ${paramId}: ${response.status}`)
+      }
+    } catch (e: any) {
+      appendConsole(`! Error updating parameter: ${e?.message ?? e}`)
     }
   }
 
@@ -213,16 +667,41 @@ export default function App() {
     const cvs = canvasRef.current
     if (!cvs) return
     const ctx = cvs.getContext('2d')!
-    const dpr = Math.max(1, window.devicePixelRatio || 1)
+
     const w = cvs.clientWidth
     const h = cvs.clientHeight
-    if (cvs.width !== Math.floor(w * dpr) || cvs.height !== Math.floor(h * dpr)) {
-      cvs.width = Math.floor(w * dpr)
-      cvs.height = Math.floor(h * dpr)
-    }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-    const BG = '#5762c8'
+    if (isPixelated) {
+      // Pixelated rendering: use very low resolution for chunky pixels
+      const pixelSize = 4 // Each pixel will be 4x4 screen pixels
+      const pixelW = Math.floor(w / pixelSize)
+      const pixelH = Math.floor(h / pixelSize)
+
+      if (cvs.width !== pixelW || cvs.height !== pixelH) {
+        cvs.width = pixelW
+        cvs.height = pixelH
+      }
+
+      // Disable all smoothing completely
+      ctx.imageSmoothingEnabled = false
+      const scale = 1 / pixelSize
+      ctx.setTransform(scale, 0, 0, scale, 0, 0)
+    } else {
+      // Normal rendering: use device pixel ratio for crisp rendering
+      const dpr = Math.max(1, window.devicePixelRatio || 1)
+      const highResW = Math.floor(w * dpr)
+      const highResH = Math.floor(h * dpr)
+
+      if (cvs.width !== highResW || cvs.height !== highResH) {
+        cvs.width = highResW
+        cvs.height = highResH
+      }
+
+      ctx.imageSmoothingEnabled = true
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    }
+
+    const BG = '#3d4a8c'
     const LINE = '#ffffff'
     const BACKEND_COLOR = '#ff6699'
 
@@ -235,26 +714,38 @@ export default function App() {
 
     drawGrid(ctx, w, h, zoom, origin)
 
-    // Draw backend entities
-    for (const ent of backendEntities) {
-      drawBackendEntity(ctx, ent, backendParams, backendEntities, BACKEND_COLOR, zoom)
+    // Draw backend entities - lines and circles first (without points)
+    for (let i = 0; i < backendEntities.length; i++) {
+      drawBackendEntity(ctx, backendEntities[i], backendParams, backendEntities, BACKEND_COLOR, zoom, false, i)
     }
 
-    // Local shapes
-    for (const s of shapes) drawShape(ctx, s, LINE, zoom)
+
+    // Then draw all points on top (backend first, then local)
+    for (let i = 0; i < backendEntities.length; i++) {
+      if (backendEntities[i].type === 0) {
+        drawBackendEntity(ctx, backendEntities[i], backendParams, backendEntities, BACKEND_COLOR, zoom, true, i)
+      }
+    }
 
     // Drawing preview
     if (isDrawingLine && lineStart && tempLineEnd) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.5)'
-      ctx.lineWidth = 2/zoom
-      ctx.beginPath()
-      ctx.moveTo(lineStart.x, -lineStart.y)
-      ctx.lineTo(tempLineEnd.x, -tempLineEnd.y)
-      ctx.stroke()
+      // Try textured line for preview, fallback to regular
+      const scale = Math.max(0.5, 2 / zoom)
+      const textureDrawn = drawTexturedLine(ctx, lineStart.x, -lineStart.y, tempLineEnd.x, -tempLineEnd.y, scale)
+
+      if (!textureDrawn) {
+        // Fallback to regular line
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)'
+        ctx.lineWidth = 2/zoom
+        ctx.beginPath()
+        ctx.moveTo(lineStart.x, -lineStart.y)
+        ctx.lineTo(tempLineEnd.x, -tempLineEnd.y)
+        ctx.stroke()
+      }
     }
 
     ctx.restore()
-  }, [origin, zoom, shapes, isDrawingLine, lineStart, tempLineEnd, backendEntities, backendParams])
+  }, [origin, zoom, isDrawingLine, lineStart, tempLineEnd, backendEntities, backendParams, isPixelated, isDragging, draggedPoint, dragCurrentPos, hoveredPoint, tool, isEditingCircle])
 
   function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number, z: number, originLocal: Vec2) {
     const viewW = w / z
@@ -263,7 +754,7 @@ export default function App() {
     ctx.save()
     const left = - (w/2 + originLocal.x) / z
     const top = - (h/2 + originLocal.y) / z
-    ctx.strokeStyle = 'rgba(255,255,255,0.2)'
+    ctx.strokeStyle = '#c2c0c348'
     ctx.lineWidth = 1/z
     ctx.beginPath()
     for (let x = Math.floor(left / minor) * minor; x < left + viewW; x += minor) {
@@ -278,31 +769,8 @@ export default function App() {
     ctx.restore()
   }
 
-  function drawShape(ctx: CanvasRenderingContext2D, s: Shape, color: string, z: number) {
-    ctx.strokeStyle = color
-    ctx.fillStyle = color
-    ctx.lineWidth = 2 / z
-    
-    if (s.kind === 'point') {
-      const pointSize = 4 / z
-      ctx.fillRect(s.c.x - pointSize/2, -s.c.y - pointSize/2, pointSize, pointSize)
-    } else if (s.kind === 'line') {
-      ctx.beginPath()
-      ctx.moveTo(s.p1.x, -s.p1.y)
-      ctx.lineTo(s.p2.x, -s.p2.y)
-      ctx.stroke()
-    } else if (s.kind === 'circle') {
-      ctx.beginPath()
-      ctx.arc(s.c.x, -s.c.y, s.r, 0, Math.PI * 2)
-      ctx.stroke()
-    } else if (s.kind === 'arc') {
-      ctx.beginPath()
-      ctx.arc(s.c.x, -s.c.y, s.r, -s.endAngle, -s.startAngle, true)
-      ctx.stroke()
-    }
-  }
 
-  function drawBackendEntity(ctx: CanvasRenderingContext2D, ent: any, params: any[], entities: any[], color: string, z: number) {
+  function drawBackendEntity(ctx: CanvasRenderingContext2D, ent: any, params: any[], entities: any[], color: string, z: number, drawPoints: boolean = true, entityIndex: number = -1) {
     ctx.strokeStyle = color
     ctx.fillStyle = color
     ctx.lineWidth = 3 / z
@@ -323,11 +791,44 @@ export default function App() {
 
     switch (ent.type) {
       case 0:
-        if (ent.data) {
-          const x = getParamValue(ent.data.x_param)
-          const y = getParamValue(ent.data.y_param)
-          const pointSize = 6 / z
-          ctx.fillRect(x - pointSize/2, -y - pointSize/2, pointSize, pointSize)
+        if (ent.data && drawPoints) {
+          let x = getParamValue(ent.data.x_param)
+          let y = getParamValue(ent.data.y_param)
+
+          // If this point is being dragged, use the drag position instead
+          if (isDragging && draggedPoint?.type === 'backend' && draggedPoint?.index === entityIndex && dragCurrentPos) {
+            x = dragCurrentPos.x
+            y = dragCurrentPos.y
+          }
+
+          // Check if this point is hovered for highlighting
+          const isHovered = hoveredPoint?.type === 'backend' && hoveredPoint?.index === entityIndex
+
+          if (isHovered && tool === 'select') {
+            // Draw sprite with yellow colorization
+            ctx.save()
+            ctx.filter = 'sepia(1) saturate(2) hue-rotate(40deg)'
+            const scale = Math.max(0.5, 3 / z)
+            const spriteDrawn = drawEntitySprite(ctx, x, -y, 0, scale)
+            ctx.restore()
+
+            if (!spriteDrawn) {
+              // Fallback with yellow color
+              ctx.fillStyle = '#FFFF00'
+              const pointSize = 3 / z
+              ctx.fillRect(x - pointSize/2, -y - pointSize/2, pointSize, pointSize)
+            }
+          } else {
+            // Normal rendering
+            const scale = Math.max(0.5, 3 / z)
+            const spriteDrawn = drawEntitySprite(ctx, x, -y, 0, scale)
+
+            if (!spriteDrawn) {
+              // Fallback to rectangle if sprite fails
+              const pointSize = 3 / z
+              ctx.fillRect(x - pointSize/2, -y - pointSize/2, pointSize, pointSize)
+            }
+          }
         }
         break
       
@@ -336,10 +837,17 @@ export default function App() {
           const p1 = getEntityPoint(ent.data.p1)
           const p2 = getEntityPoint(ent.data.p2)
           if (p1 && p2) {
-            ctx.beginPath()
-            ctx.moveTo(p1.x, -p1.y)
-            ctx.lineTo(p2.x, -p2.y)
-            ctx.stroke()
+            // Try to use textured line, fallback to regular line
+            const scale = Math.max(0.5, 3 / z)
+            const textureDrawn = drawTexturedLine(ctx, p1.x, -p1.y, p2.x, -p2.y, scale)
+
+            if (!textureDrawn) {
+              // Fallback to regular line if texture fails
+              ctx.beginPath()
+              ctx.moveTo(p1.x, -p1.y)
+              ctx.lineTo(p2.x, -p2.y)
+              ctx.stroke()
+            }
           }
         }
         break
@@ -349,9 +857,16 @@ export default function App() {
           const center = getEntityPoint(ent.data.center)
           const radius = getParamValue(ent.data.radius_param)
           if (center) {
-            ctx.beginPath()
-            ctx.arc(center.x, -center.y, radius, 0, Math.PI * 2)
-            ctx.stroke()
+            // Try to use textured circle, fallback to regular circle
+            const scale = Math.max(0.5, 3 / z)
+            const textureDrawn = drawTexturedCircle(ctx, center.x, -center.y, radius, scale, z)
+
+            if (!textureDrawn) {
+              // Fallback to regular circle if texture fails
+              ctx.beginPath()
+              ctx.arc(center.x, -center.y, radius, 0, Math.PI * 2)
+              ctx.stroke()
+            }
           }
         }
         break
@@ -377,7 +892,7 @@ export default function App() {
     const rect = canvasRef.current!.getBoundingClientRect()
     const x = (clientX - rect.left) - rect.width/2
     const y = (clientY - rect.top) - rect.height/2
-    return { x: (x - origin.x)/zoom, y: (y - origin.y)/zoom }
+    return { x: (x - origin.x)/zoom, y: -(y - origin.y)/zoom }
   }
 
   function onWheel(e: React.WheelEvent<HTMLCanvasElement>) {
@@ -405,9 +920,33 @@ export default function App() {
     }
     if (e.button === 0) {
       const p = screenToWorld(e.clientX, e.clientY)
-      
+
+      // Check if clicking on a point for dragging or circle border for radius editing (only in select mode)
+      if (tool === 'select') {
+        const tolerance = Math.max(20, 50 / zoom)
+
+        // First check for circle border click
+        const circleBorder = findCircleBorderAt(backendEntities, backendParams, p, 10)
+        if (circleBorder !== null) {
+          console.log(`Starting circle radius edit for entity ${circleBorder.entityIndex}`)
+          setIsEditingCircle(true)
+          setEditedCircle({ entityIndex: circleBorder.entityIndex, initialRadius: circleBorder.radius })
+          return
+        }
+
+        // Then try backend point dragging
+        const backendPoint = findBackendPointAt(backendEntities, backendParams, p, tolerance)
+        if (backendPoint !== null) {
+          console.log(`Starting drag of backend point ${backendPoint.index}`)
+          setIsDragging(true)
+          setDraggedPoint(backendPoint)
+          setDragStartPos(p)
+          return
+        }
+      }
+
       if (tool === 'point') {
-        addShape({ kind: 'point', c: p })
+        addBackendPoint(p)
       } else if (tool === 'line') {
         if (!isDrawingLine) {
           setIsDrawingLine(true)
@@ -415,124 +954,142 @@ export default function App() {
           setTempLineEnd(p)
         } else {
           if (lineStart) {
-            addShape({ kind: 'line', p1: lineStart, p2: p })
+            addBackendLine(lineStart, p)
           }
           setIsDrawingLine(false)
           setLineStart(null)
           setTempLineEnd(null)
         }
       } else if (tool === 'circle') {
-        addShape({ kind: 'circle', c: p, r: 30 })
+        addBackendCircle(p, 30)
       } else if (tool === 'arc') {
-        if (!isDrawingArc) {
-          setIsDrawingArc(true)
-          setArcCenter(p)
-          setArcRadius(null)
-        } else if (arcCenter && !arcRadius) {
-          const r = distance(arcCenter, p)
-          setArcRadius(r)
-        } else if (arcCenter && arcRadius) {
-          addShape({ kind: 'arc', c: arcCenter, r: arcRadius, startAngle: 0, endAngle: Math.PI/2 })
-          setIsDrawingArc(false)
-          setArcCenter(null)
-          setArcRadius(null)
-        }
+        appendConsole('Arc creation not yet implemented for backend')
       } else if (tool === 'delete') {
-        deleteLast()
+        appendConsole('Delete not yet implemented for backend')
       }
     }
   }
 
   function onMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
+    const p = screenToWorld(e.clientX, e.clientY)
+
     if (isPanning) {
       const dx = e.clientX - panStart.current.x
       const dy = e.clientY - panStart.current.y
       setOrigin({ x: originStart.current.x + dx, y: originStart.current.y + dy })
+    } else if (isDragging && draggedPoint !== null) {
+      setDragCurrentPos(p)
+      // For backend points, we just track position for visual feedback
+    } else if (isEditingCircle && editedCircle !== null) {
+      // Update circle radius based on distance from center
+      const entity = backendEntities[editedCircle.entityIndex]
+      if (entity && entity.type === 2) {
+        const centerEntity = backendEntities.find(e => e.id === entity.data.center)
+        if (centerEntity && centerEntity.data) {
+          const getParamValue = (paramIdx: number) => {
+            const param = backendParams.find(p => p.id === paramIdx)
+            return param ? param.value : 0
+          }
+
+          const centerX = getParamValue(centerEntity.data.x_param)
+          const centerY = getParamValue(centerEntity.data.y_param)
+          const newRadius = distance({ x: centerX, y: centerY }, p)
+
+          if (newRadius > 1) { // Minimum radius
+            updateCircleRadius(editedCircle.entityIndex, newRadius)
+          }
+        }
+      }
     } else if (isDrawingLine && lineStart) {
-      const p = screenToWorld(e.clientX, e.clientY)
       setTempLineEnd(p)
+    } else if (tool === 'select') {
+      // Update hover state for point highlighting
+      const tolerance = Math.max(20, 50 / zoom)
+      const hoveredBackendPoint = findBackendPointAt(backendEntities, backendParams, p, tolerance)
+      if (hoveredBackendPoint !== hoveredPoint) {
+        console.log('Hover changed:', hoveredBackendPoint)
+        setHoveredPoint(hoveredBackendPoint)
+      }
     }
   }
   
-  function onMouseUp() { setIsPanning(false) }
-  function onMouseLeave() { setIsPanning(false) }
+  function onMouseUp(e: React.MouseEvent<HTMLCanvasElement>) {
+    setIsPanning(false)
+    if (isDragging && draggedPoint !== null) {
+      const p = screenToWorld(e.clientX, e.clientY)
 
-  function pushHistory(next: Shape[]) {
-    setUndo(u => [...u, shapes])
-    setRedo([])
-    setShapes(next)
+      if (draggedPoint.type === 'backend') {
+        // Update backend point via API
+        console.log(`Updating backend point ${draggedPoint.index} to (${p.x}, ${p.y})`)
+        updateBackendPoint(draggedPoint.index, p)
+      }
+    }
+    if (isEditingCircle) {
+      console.log('Finished circle radius editing')
+      setIsEditingCircle(false)
+      setEditedCircle(null)
+    }
+    setIsDragging(false)
+    setDraggedPoint(null)
+    setDragStartPos(null)
+    setDragCurrentPos(null)
   }
-  function addShape(s: Shape) { pushHistory([...shapes, s]) }
-  function deleteLast() { if (shapes.length) pushHistory(shapes.slice(0, -1)) }
-  function clearAll() { pushHistory([]); appendConsole('Cleared canvas') }
-  function undo() {
-    setUndo(u => {
-      if (!u.length) return u
-      const prev = u[u.length - 1]
-      setRedo(r => [...r, shapes])
-      setShapes(prev)
-      return u.slice(0, -1)
-    })
+  function onMouseLeave() {
+    setIsPanning(false)
+    setIsDragging(false)
+    setDraggedPoint(null)
+    setDragStartPos(null)
+    setDragCurrentPos(null)
+    setHoveredPoint(null)
+    setIsEditingCircle(false)
+    setEditedCircle(null)
   }
-  function redo() {
-    setRedo(r => {
-      if (!r.length) return r
-      const next = r[r.length - 1]
-      setUndo(u => [...u, shapes])
-      setShapes(next)
-      return r.slice(0, -1)
-    })
-  }
+
+  function clearAll() { appendConsole('Clear all not implemented for backend') }
 
   function openFromFile(files: FileList | null) {
-    if (!files || !files[0]) return
-    const file = files[0]
-    file.text().then(txt => {
-      try {
-        const parsed = JSON.parse(txt) as Shape[]
-        pushHistory(parsed)
-        appendConsole(`Opened ${file.name} (${parsed.length} shapes)`) 
-      } catch (e: any) {
-        appendConsole(`! Failed to parse file: ${e.message ?? e}`)
-      }
-    })
+    appendConsole('Open file not implemented for backend')
   }
 
   function saveToFile() {
-    const blob = new Blob([JSON.stringify(shapes, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'scene.json'
-    a.click()
-    URL.revokeObjectURL(url)
+    appendConsole('Save file not implemented for backend')
   }
 
   const actions = {
     onNew: clearAll,
     onOpen: () => fileInputRef.current?.click(),
-    onUndo: undo,
-    onRedo: redo,
+    onUndo: () => appendConsole('Undo not implemented for backend'),
+    onRedo: () => appendConsole('Redo not implemented for backend'),
     onSolve: () => {
       call('/api/solve/quad', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ a: 1, b: 0, c: -1 }) })
       setTimeout(() => fetchBackendData(), 100)
     },
-    onHelp: () => appendConsole('Help: Left-click places shapes with the selected tool. For lines, click start then end point. Middle/Right drag to pan. Wheel to zoom.'),
+    onHelp: () => appendConsole('Help: Left-click to create points (backend managed). Select tool to drag points. Middle/Right drag to pan. Wheel to zoom.'),
+    onTogglePixelated: () => setIsPixelated(!isPixelated),
   }
 
   return (
-    <div style={{...styles.app, ['--ui-scale' as any]: uiScale}} className="blueprint">
+    <div style={{...styles.app, ['--ui-scale' as any]: uiScale, fontFamily: `"${currentFont}", "Courier New", monospace`}} className="blueprint">
       <input ref={fileInputRef} type="file" accept="application/json" style={{ display: 'none' }} onChange={(e) => openFromFile(e.target.files)} />
-      <TopBar actions={actions} onSave={saveToFile} onBumpScale={bumpScale} />
+      <TopBar actions={actions} onSave={saveToFile} onBumpScale={bumpScale} isPixelated={isPixelated} currentFont={currentFont} onFontChange={setCurrentFont} />
       <div style={styles.bodyRow}>
         <aside style={styles.side}>
           <LeftPanel setTool={setTool} tool={tool} setConstraint={setConstraint} constraint={constraint} />
         </aside>
         <div style={styles.centerCol}>
-          <div style={styles.viewportWrap}>
+          <div style={styles.viewportWrap} className={isPixelated ? 'pixelated-container' : ''}>
             <canvas
               ref={canvasRef}
-              style={styles.canvas}
+              className={isPixelated ? 'pixelated-canvas' : ''}
+              style={{
+                ...styles.canvas,
+                imageRendering: isPixelated ? 'pixelated' : 'auto',
+                // Force pixelated scaling
+                ...(isPixelated && {
+                  imageRendering: 'pixelated',
+                  filter: 'none'
+                })
+              }}
               onWheel={onWheel}
               onMouseDown={onMouseDown}
               onMouseMove={onMouseMove}
@@ -556,13 +1113,14 @@ export default function App() {
               zIndex: 10
             }}
           />
-          <RightPanel 
-            shapes={shapes} 
-            activeTab={activeTab} 
+          <RightPanel
+
+            activeTab={activeTab}
             setActiveTab={setActiveTab}
             backendEntities={backendEntities}
             backendParams={backendParams}
             backendConstraints={backendConstraints}
+            updateParameterValue={updateParameterValue}
           />
         </div>
       </div>
@@ -572,7 +1130,22 @@ export default function App() {
   )
 }
 
-function TopBar({ actions, onSave, onBumpScale }:{ actions: { onNew: ()=>void; onOpen: ()=>void; onUndo: ()=>void; onRedo: ()=>void; onSolve: ()=>void; onHelp: ()=>void }, onSave: ()=>void, onBumpScale: (d:number)=>void }) {
+function TopBar({ actions, onSave, onBumpScale, isPixelated, currentFont, onFontChange }:{
+  actions: {
+    onNew: ()=>void;
+    onOpen: ()=>void;
+    onUndo: ()=>void;
+    onRedo: ()=>void;
+    onSolve: ()=>void;
+    onHelp: ()=>void;
+    onTogglePixelated: ()=>void;
+  },
+  onSave: ()=>void,
+  onBumpScale: (d:number)=>void,
+  isPixelated: boolean,
+  currentFont: string,
+  onFontChange: (font: string) => void
+}) {
   return (
     <div style={styles.topBar}>
       <div style={styles.logo}>free_form</div>
@@ -583,6 +1156,40 @@ function TopBar({ actions, onSave, onBumpScale }:{ actions: { onNew: ()=>void; o
         <IconButton name="redo"  title="Redo" onClick={actions.onRedo} />
         <IconButton name="solve" title="Solve (API demo)" onClick={actions.onSolve} />
         <IconButton name="help"  title="Help" onClick={actions.onHelp} />
+        <div className="sep" />
+        <button
+          className="icon-btn"
+          aria-label={`Toggle ${isPixelated ? 'smooth' : 'pixelated'} rendering`}
+          title={`Switch to ${isPixelated ? 'smooth' : 'pixelated'} rendering`}
+          onClick={actions.onTogglePixelated}
+          style={{ backgroundColor: isPixelated ? 'rgba(255,255,255,0.2)' : 'transparent' }}
+        >
+          PX
+        </button>
+        <div className="sep" />
+        <select
+          value={currentFont}
+          onChange={(e) => onFontChange(e.target.value)}
+          style={{
+            background: '#5762c8',
+            border: '1px solid #ffffff',
+            color: '#ffffff',
+            padding: '2px 4px',
+            fontSize: 'calc(9px * var(--ui-scale))',
+            fontFamily: 'inherit'
+          }}
+          title="Change font"
+        >
+          <option value="PxFont" style={{ background: '#5762c8', color: '#ffffff' }}>PxFont</option>
+          <option value="Alagard" style={{ background: '#5762c8', color: '#ffffff' }}>Alagard</option>
+          <option value="Aurora" style={{ background: '#5762c8', color: '#ffffff' }}>Aurora</option>
+          <option value="Bit23" style={{ background: '#5762c8', color: '#ffffff' }}>Bit-23</option>
+          <option value="DePixelBreit" style={{ background: '#5762c8', color: '#ffffff' }}>DePixelBreit</option>
+          <option value="Pixellari" style={{ background: '#5762c8', color: '#ffffff' }}>Pixellari</option>
+          <option value="RetroGaming" style={{ background: '#5762c8', color: '#ffffff' }}>Retro Gaming</option>
+          <option value="VCR" style={{ background: '#5762c8', color: '#ffffff' }}>VCR OSD Mono</option>
+          <option value="WindowsBold" style={{ background: '#5762c8', color: '#ffffff' }}>Windows Bold</option>
+        </select>
         <div className="sep" />
         <button className="icon-btn" aria-label="UI smaller" title="UI smaller" onClick={()=>onBumpScale(-0.1)}>A-</button>
         <button className="icon-btn" aria-label="UI larger"  title="UI larger"  onClick={()=>onBumpScale(+0.1)}>A+</button>
@@ -601,6 +1208,18 @@ function LeftPanel({ setTool, tool, setConstraint, constraint }:{
     <>
       <div style={styles.sectionHeader}>Tools</div>
       <div className="icon-grid">
+        <button
+          className="icon-btn"
+          title="Select/Move"
+          onClick={() => setTool('select')}
+          style={{
+            backgroundColor: tool === 'select' ? 'rgba(255,255,255,0.2)' : 'transparent',
+            fontSize: 'calc(9px * var(--ui-scale))',
+            fontFamily: 'inherit'
+          }}
+        >
+          SEL
+        </button>
         <IconButton name="point"  title="Point" onClick={() => setTool('point')} />
         <IconButton name="line"   title="Line" onClick={() => setTool('line')} />
         <IconButton name="circle" title="Circle" onClick={() => setTool('circle')} />
@@ -628,13 +1247,13 @@ function LeftPanel({ setTool, tool, setConstraint, constraint }:{
   )
 }
 
-function RightPanel({ shapes, activeTab, setActiveTab, backendEntities, backendParams, backendConstraints }:{ 
-  shapes: Shape[]; 
-  activeTab: 'parameters'|'entities'|'constraints'; 
+function RightPanel({ activeTab, setActiveTab, backendEntities, backendParams, backendConstraints, updateParameterValue }:{
+  activeTab: 'parameters'|'entities'|'constraints';
   setActiveTab: (tab: 'parameters'|'entities'|'constraints') => void;
   backendEntities: any[];
   backendParams: any[];
   backendConstraints: any[];
+  updateParameterValue: (paramId: number, newValue: number) => Promise<void>;
 }) {
   
   const getEntityTypeName = (type: number) => {
@@ -668,14 +1287,51 @@ function RightPanel({ shapes, activeTab, setActiveTab, backendEntities, backendP
       {activeTab === 'parameters' && (
         <div style={styles.tabContent}>
           <div style={styles.sectionHeader}>Parameters (Backend)</div>
-          <ul style={styles.listStyle}>
+          <div style={styles.listStyle}>
             {backendParams.map((param, i) => (
-              <li key={i}>
-                x{param.id} = {param.value.toFixed(3)}
-              </li>
+              <div key={param.id} style={{
+                display: 'flex',
+                alignItems: 'center',
+                marginBottom: '3px',
+                fontSize: '11px'
+              }}>
+                <span style={{ minWidth: '25px', color: '#ffffff', display: 'inline-block' }}>
+                  x{param.id}
+                </span>
+                <span style={{ color: '#ffffff' }}>
+                  =
+                </span>
+                <input
+                  key={`param-${param.id}-${param.value.toFixed(3)}`}
+                  type="text"
+                  defaultValue={param.value.toFixed(3)}
+                  onBlur={(e) => {
+                    const newValue = parseFloat(e.target.value)
+                    if (!isNaN(newValue) && newValue !== param.value) {
+                      updateParameterValue(param.id, newValue)
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.currentTarget.blur()
+                    }
+                  }}
+                  style={{
+                    marginLeft: '8px',
+                    width: '70px',
+                    padding: '2px 4px',
+                    fontSize: '11px',
+                    fontFamily: '"PxFont", "Courier New", monospace',
+                    backgroundColor: '#5762c8',
+                    color: '#ffffff',
+                    border: '1px solid #ffffff',
+                    outline: 'none'
+                  }}
+                />
+              </div>
             ))}
-            {!backendParams.length && <li style={{ opacity: 0.6 }}>No parameters defined</li>}
-          </ul>
+            {!backendParams.length && <div style={{ opacity: 0.6, fontSize: '11px' }}>No parameters defined</div>}
+          </div>
           <div style={styles.infoText}>
             Parameters are variables that can be constrained and solved by the system.
           </div>
@@ -696,23 +1352,6 @@ function RightPanel({ shapes, activeTab, setActiveTab, backendEntities, backendP
             ))}
             {!backendEntities.length && <li style={{ opacity: 0.6 }}>No entities in backend</li>}
           </ul>
-          
-          <div style={styles.sectionHeader}>Local Shapes</div>
-          <ul style={styles.listStyle}>
-            {shapes.map((s, i) => (
-              <li key={i}>
-                {s.kind} #{i + 1}
-                {s.kind === 'point' && ` (${s.c.x.toFixed(1)}, ${s.c.y.toFixed(1)})`}
-                {s.kind === 'circle' && ` r=${s.r.toFixed(1)}`}
-                {s.kind === 'arc' && ` r=${s.r.toFixed(1)}`}
-              </li>
-            ))}
-            {!shapes.length && <li style={{ opacity: 0.6 }}>No local shapes yet</li>}
-          </ul>
-          
-          <div style={styles.infoText}>
-            Backend entities are from the C++ solver. Local shapes are drawn in the canvas.
-          </div>
         </div>
       )}
       
@@ -748,15 +1387,16 @@ function Console({ out }:{ out: string }) {
 
 function IconButton({ name, title, onClick }:{ name: IconName; title: string; onClick?: () => void }) {
   const { x, y } = spritePos(name)
-  const scaleFactor = `calc((var(--btn) - ${ICON_SIZE / 2}px * var(--ui-scale)) / ${ICON_SIZE}px)`
   return (
     <button className="icon-btn" aria-label={title} title={title} onClick={onClick}>
       <span
         className="icon-sprite"
         style={{
           backgroundImage: `url(${SPRITE_URL})`,
-          backgroundPosition: `calc(-${x}px * ${scaleFactor}) calc(-${y}px * ${scaleFactor})`,
-          backgroundSize: `calc(${ICON_COLS * ICON_SIZE}px * ${scaleFactor}) auto`,
+          backgroundPosition: `-${x}px -${y}px`,
+          backgroundSize: `128px auto`,
+          transform: 'scale(2)',
+          transformOrigin: 'center',
         }}
       />
     </button>
@@ -764,14 +1404,14 @@ function IconButton({ name, title, onClick }:{ name: IconName; title: string; on
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  app: { height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', background: '#5762c8', color: '#ffffff', fontFamily: '"Courier New", monospace' },
+  app: { height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', background: '#5762c8', color: '#ffffff', fontFamily: '"PxFont", "Courier New", monospace' },
   topBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '3px 6px', borderBottom: '2px solid #ffffff', background: '#5762c8' },
   logo: { fontWeight: 700, color: '#ffffff' },
   topBtns: { display: 'flex', gap: 3 },
   bodyRow: { flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' },
   side: { width: 200, borderRight: '2px solid #ffffff', borderLeft: '2px solid #ffffff', background: '#5762c8', minWidth: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', flexShrink: 0 },
   centerCol: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, overflow: 'hidden' },
-  viewportWrap: { flex: 1, position: 'relative', background: '#5762c8' },
+  viewportWrap: { flex: 1, position: 'relative', background: '#3d4a8c' },
   canvas: { width: '100%', height: '100%', display: 'block', cursor: 'crosshair' },
   console: { height: 110, borderTop: '2px solid #ffffff', background: '#5762c8', display: 'flex', flexDirection: 'column' },
   sectionHeader: { padding: '3px 6px', borderBottom: '2px solid #ffffff', background: '#5762c8', color: '#ffffff', fontSize: 11, fontWeight: 'bold' },
@@ -784,10 +1424,83 @@ const styles: Record<string, React.CSSProperties> = {
 function StyleTag() {
   return (
     <style>{`
+      @font-face {
+        font-family: 'PxFont';
+        src: url('/fonts/pxfont.woff2') format('woff2');
+        font-weight: normal;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: 'Alagard';
+        src: url('/fonts/alagard.ttf') format('truetype');
+        font-weight: normal;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: 'Aurora';
+        src: url('/fonts/aurora-24.ttf') format('truetype');
+        font-weight: normal;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: 'Bit23';
+        src: url('/fonts/Bit-23.ttf') format('truetype');
+        font-weight: normal;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: 'DePixelBreit';
+        src: url('/fonts/DePixelBreit.ttf') format('truetype');
+        font-weight: normal;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: 'Pixellari';
+        src: url('/fonts/Pixellari.ttf') format('truetype');
+        font-weight: normal;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: 'RetroGaming';
+        src: url('/fonts/Retro Gaming.ttf') format('truetype');
+        font-weight: normal;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: 'VCR';
+        src: url('/fonts/VCR_OSD_MONO_1.001.ttf') format('truetype');
+        font-weight: normal;
+        font-style: normal;
+        font-display: swap;
+      }
+
+      @font-face {
+        font-family: 'WindowsBold';
+        src: url('/fonts/windows-bold[1].ttf') format('truetype');
+        font-weight: normal;
+        font-style: normal;
+        font-display: swap;
+      }
+
       .blueprint {
         --ui-scale: var(--ui-scale, 1);
         font-size: calc(11px * var(--ui-scale));
         color: #ffffff;
+        font-family: 'PxFont', "Courier New", monospace;
       }
 
       :root .blueprint { --btn: calc(32px * var(--ui-scale)); }
@@ -815,13 +1528,13 @@ function StyleTag() {
         filter: brightness(0.9);
       }
 
-      .icon-sprite { 
-        display: inline-block; 
-        image-rendering: pixelated; 
-        image-rendering: crisp-edges; 
-        background-repeat: no-repeat; 
-        width: calc(var(--btn) - 8px * var(--ui-scale)); 
-        height: calc(var(--btn) - 8px * var(--ui-scale)); 
+      .icon-sprite {
+        display: inline-block;
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+        background-repeat: no-repeat;
+        width: 16px;
+        height: 16px;
         pointer-events: none;
       }
 
@@ -838,7 +1551,7 @@ function StyleTag() {
         border-bottom: none;
         color: #ffffff;
         cursor: pointer;
-        font-family: "Courier New", monospace;
+        font-family: 'PxFont', "Courier New", monospace;
         font-size: calc(9px * var(--ui-scale));
         transition: background-color 0.1s ease;
       }
@@ -864,6 +1577,27 @@ function StyleTag() {
       }
       body.resizing .resize-handle {
         pointer-events: auto !important;
+      }
+
+      .pixelated-container * {
+        image-rendering: pixelated !important;
+        image-rendering: -moz-crisp-edges !important;
+        image-rendering: -webkit-crisp-edges !important;
+        image-rendering: crisp-edges !important;
+        image-rendering: -o-crisp-edges !important;
+        -ms-interpolation-mode: nearest-neighbor !important;
+      }
+
+      .pixelated-canvas {
+        image-rendering: pixelated !important;
+        image-rendering: -moz-crisp-edges !important;
+        image-rendering: -webkit-crisp-edges !important;
+        image-rendering: crisp-edges !important;
+        -ms-interpolation-mode: nearest-neighbor !important;
+      }
+
+      canvas[style*="pixelated"] {
+        image-rendering: pixelated !important;
       }
     `}</style>
   )
