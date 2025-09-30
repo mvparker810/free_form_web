@@ -1,6 +1,9 @@
 # CMake build directories
 back/build/
 
+# Emscripten SDK
+emsdk/
+
 # Node modules
 front/node_modules/
 front/dist/
