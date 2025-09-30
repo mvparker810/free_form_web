@@ -10,7 +10,7 @@ type IconName =
   | 'coincident' | 'parallel' | 'perpendicular' | 'fixed' | 'measurement' | 'equals' | 'tangent' | 'horizontal' | 'vertical'
 
 // --- Spritesheet config ---
-const SPRITE_URL = '/icons/sprite.png'
+const SPRITE_URL = `${import.meta.env.BASE_URL}icons/sprite.png`
 const ICON_SIZE = 16
 const ICON_COLS = 8
 
@@ -114,7 +114,7 @@ function quantizeColor(color: string): string {
 }
 
 // Entity sprite system
-const ENTITY_SPRITE_URL = '/icons/entities.png'
+const ENTITY_SPRITE_URL = `${import.meta.env.BASE_URL}icons/entities.png`
 const ENTITY_SPRITE_SIZE = 8 // 8x8 sprites
 const ENTITY_SPRITE_COLS = 8 // 8 columns
 let entitySpriteImage: HTMLImageElement | null = null
@@ -1422,11 +1422,12 @@ const styles: Record<string, React.CSSProperties> = {
 }
 
 function StyleTag() {
+  const baseUrl = import.meta.env.BASE_URL
   return (
     <style>{`
       @font-face {
         font-family: 'PxFont';
-        src: url('/fonts/pxfont.woff2') format('woff2');
+        src: url('${baseUrl}fonts/pxfont.woff2') format('woff2');
         font-weight: normal;
         font-style: normal;
         font-display: swap;
@@ -1434,7 +1435,7 @@ function StyleTag() {
 
       @font-face {
         font-family: 'Alagard';
-        src: url('/fonts/alagard.ttf') format('truetype');
+        src: url('${baseUrl}fonts/alagard.ttf') format('truetype');
         font-weight: normal;
         font-style: normal;
         font-display: swap;
@@ -1442,7 +1443,7 @@ function StyleTag() {
 
       @font-face {
         font-family: 'Aurora';
-        src: url('/fonts/aurora-24.ttf') format('truetype');
+        src: url('${baseUrl}fonts/aurora-24.ttf') format('truetype');
         font-weight: normal;
         font-style: normal;
         font-display: swap;
@@ -1450,7 +1451,7 @@ function StyleTag() {
 
       @font-face {
         font-family: 'Bit23';
-        src: url('/fonts/Bit-23.ttf') format('truetype');
+        src: url('${baseUrl}fonts/Bit-23.ttf') format('truetype');
         font-weight: normal;
         font-style: normal;
         font-display: swap;
@@ -1458,7 +1459,7 @@ function StyleTag() {
 
       @font-face {
         font-family: 'DePixelBreit';
-        src: url('/fonts/DePixelBreit.ttf') format('truetype');
+        src: url('${baseUrl}fonts/DePixelBreit.ttf') format('truetype');
         font-weight: normal;
         font-style: normal;
         font-display: swap;
@@ -1466,7 +1467,7 @@ function StyleTag() {
 
       @font-face {
         font-family: 'Pixellari';
-        src: url('/fonts/Pixellari.ttf') format('truetype');
+        src: url('${baseUrl}fonts/Pixellari.ttf') format('truetype');
         font-weight: normal;
         font-style: normal;
         font-display: swap;
@@ -1474,7 +1475,7 @@ function StyleTag() {
 
       @font-face {
         font-family: 'RetroGaming';
-        src: url('/fonts/Retro Gaming.ttf') format('truetype');
+        src: url('${baseUrl}fonts/Retro Gaming.ttf') format('truetype');
         font-weight: normal;
         font-style: normal;
         font-display: swap;
@@ -1482,7 +1483,7 @@ function StyleTag() {
 
       @font-face {
         font-family: 'VCR';
-        src: url('/fonts/VCR_OSD_MONO_1.001.ttf') format('truetype');
+        src: url('${baseUrl}fonts/VCR_OSD_MONO_1.001.ttf') format('truetype');
         font-weight: normal;
         font-style: normal;
         font-display: swap;
@@ -1490,7 +1491,7 @@ function StyleTag() {
 
       @font-face {
         font-family: 'WindowsBold';
-        src: url('/fonts/windows-bold[1].ttf') format('truetype');
+        src: url('${baseUrl}fonts/windows-bold[1].ttf') format('truetype');
         font-weight: normal;
         font-style: normal;
         font-display: swap;
@@ -1511,7 +1512,7 @@ function StyleTag() {
         display: inline-grid; 
         place-items: center;
         padding: 0; 
-        background: url('/icons/button-bg.png') center center no-repeat;
+        background: url('${baseUrl}icons/button-bg.png') center center no-repeat;
         background-size: 100% 100%;
         border: none;
         cursor: pointer;
