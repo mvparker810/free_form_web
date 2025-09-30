@@ -2,25 +2,45 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "backend:configure (once)",
-      "type": "process",
-      "command": "cmake",
-      "args": [
-        "-S", ".", "-B", "build",
-        "-G", "Visual Studio 17 2022",
-        "-A", "x64",
-        "-DCMAKE_TOOLCHAIN_FILE=${env:VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-        "-DCMAKE_BUILD_TYPE=Release",
-        "-DCMAKE_SUPPRESS_REGENERATION=ON"
-      ],
-      "options": { "cwd": "${workspaceFolder}/back" }
+      "label": "wasm:build",
+      "type": "shell",
+      "command": "${workspaceFolder}/wasm/build.bat",
+      "options": { "cwd": "${workspaceFolder}/wasm" },
+      "windows": {
+        "command": "${workspaceFolder}/wasm/build.bat"
+      },
+      "linux": {
+        "command": "bash",
+        "args": ["build.sh"]
+      },
+      "osx": {
+        "command": "bash",
+        "args": ["build.sh"]
+      }
     },
     {
-      "label": "backend:build",
-      "type": "process",
-      "command": "cmake",
-      "args": ["--build", "build", "--config", "Release", "--target", "backend", "--", "/m"],
-      "options": { "cwd": "${workspaceFolder}/back" }
+      "label": "wasm:copy-to-frontend",
+      "type": "shell",
+      "command": "copy",
+      "args": ["freeform.js", "..\\front\\public\\freeform.js", "&&", "copy", "freeform.wasm", "..\\front\\public\\freeform.wasm"],
+      "options": { "cwd": "${workspaceFolder}/wasm" },
+      "windows": {
+        "command": "cmd",
+        "args": ["/c", "copy freeform.js ..\\front\\public\\freeform.js && copy freeform.wasm ..\\front\\public\\freeform.wasm"]
+      },
+      "linux": {
+        "command": "cp",
+        "args": ["freeform.js", "freeform.wasm", "../front/public/"]
+      },
+      "osx": {
+        "command": "cp",
+        "args": ["freeform.js", "freeform.wasm", "../front/public/"]
+      }
+    },
+    {
+      "label": "wasm:build-and-copy",
+      "dependsOrder": "sequence",
+      "dependsOn": ["wasm:build", "wasm:copy-to-frontend"]
     },
     {
       "label": "frontend:dev",
@@ -30,14 +50,20 @@
       "options": { "cwd": "${workspaceFolder}/front" }
     },
     {
-      "label": "fullstack:dev (build backend + run both)",
-      "dependsOrder": "parallel",
-      "dependsOn": ["backend:build", "frontend:dev"]
+      "label": "frontend:build",
+      "type": "process",
+      "command": "npm",
+      "args": ["run", "build"],
+      "options": { "cwd": "${workspaceFolder}/front" }
     },
     {
-      "label": "fullstack:dev (no build)",
-      "dependsOrder": "parallel",
+      "label": "dev (frontend only - WASM)",
       "dependsOn": ["frontend:dev"]
+    },
+    {
+      "label": "build:all (WASM + frontend)",
+      "dependsOrder": "sequence",
+      "dependsOn": ["wasm:build-and-copy", "frontend:build"]
     }
   ]
 }

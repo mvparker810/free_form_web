@@ -23,6 +23,9 @@ export interface FreeFormModule extends EmscriptenModule {
   _wasm_get_point_data(skt_ptr: number, entity_idx: number, x_param_out: number, y_param_out: number): void
   _wasm_get_line_data(skt_ptr: number, entity_idx: number, p1_out: number, p2_out: number): void
   _wasm_get_circle_data(skt_ptr: number, entity_idx: number, center_out: number, radius_param_out: number): void
+
+  getValue(ptr: number, type: string): number
+  setValue(ptr: number, value: number, type: string): void
 }
 
 declare function createFreeFormModule(): Promise<FreeFormModule>
@@ -52,28 +55,24 @@ export class FreeFormSketch {
   private sketchPtr: number = 0
 
   async initialize(p_cap = 1024, e_cap = 256, c_cap = 128) {
-    // @ts-ignore - Import WASM module
     const baseUrl = import.meta.env.BASE_URL
     const modulePath = `${baseUrl}freeform.js`
 
-    // Load the module dynamically
-    const response = await fetch(modulePath)
-    const moduleText = await response.text()
-
-    // Create a script element to load the module
-    const createModule = await new Promise<any>((resolve) => {
+    // Load the Emscripten module script
+    const createModule = await new Promise<any>((resolve, reject) => {
       const script = document.createElement('script')
-      script.textContent = moduleText
+      script.src = modulePath
       script.onload = () => {
-        // @ts-ignore
-        resolve(window.createFreeFormModule)
+        // @ts-ignore - createFreeFormModule is added to window by the loaded script
+        if (window.createFreeFormModule) {
+          // @ts-ignore
+          resolve(window.createFreeFormModule)
+        } else {
+          reject(new Error('createFreeFormModule not found on window'))
+        }
       }
+      script.onerror = () => reject(new Error('Failed to load WASM script'))
       document.head.appendChild(script)
-      // @ts-ignore
-      if (window.createFreeFormModule) {
-        // @ts-ignore
-        resolve(window.createFreeFormModule)
-      }
     })
 
     this.module = await createModule({
@@ -145,12 +144,12 @@ export class FreeFormSketch {
 
     const actualCount = this.module._wasm_get_all_parameters(this.sketchPtr, idsPtr, valuesPtr, count)
 
-    const ids = new Int32Array(this.module.HEAP32.buffer, idsPtr, actualCount)
-    const values = new Float64Array(this.module.HEAPF64.buffer, valuesPtr, actualCount)
-
+    // Use getValue to read from WASM memory
     const parameters: Parameter[] = []
     for (let i = 0; i < actualCount; i++) {
-      parameters.push({ id: ids[i], value: values[i] })
+      const id = this.module.getValue(idsPtr + i * 4, 'i32')
+      const value = this.module.getValue(valuesPtr + i * 8, 'double')
+      parameters.push({ id, value })
     }
 
     this.module._free(idsPtr)
@@ -170,40 +169,36 @@ export class FreeFormSketch {
 
     const actualCount = this.module._wasm_get_all_entities(this.sketchPtr, idsPtr, typesPtr, count)
 
-    const ids = new Int32Array(this.module.HEAP32.buffer, idsPtr, actualCount)
-    const types = new Int32Array(this.module.HEAP32.buffer, typesPtr, actualCount)
-
     const entities: Entity[] = []
     for (let i = 0; i < actualCount; i++) {
-      const entity: Entity = {
-        id: ids[i],
-        type: types[i] as EntityType
-      }
+      const id = this.module.getValue(idsPtr + i * 4, 'i32')
+      const type = this.module.getValue(typesPtr + i * 4, 'i32') as EntityType
+
+      const entity: Entity = { id, type }
 
       // Get type-specific data
       const dataPtr = this.module._malloc(16) // 4 ints max
-      const dataView = new Int32Array(this.module.HEAP32.buffer, dataPtr, 4)
 
       switch (entity.type) {
         case EntityType.POINT:
           this.module._wasm_get_point_data(this.sketchPtr, entity.id, dataPtr, dataPtr + 4)
           entity.data = {
-            x_param: dataView[0],
-            y_param: dataView[1]
+            x_param: this.module.getValue(dataPtr, 'i32'),
+            y_param: this.module.getValue(dataPtr + 4, 'i32')
           }
           break
         case EntityType.LINE:
           this.module._wasm_get_line_data(this.sketchPtr, entity.id, dataPtr, dataPtr + 4)
           entity.data = {
-            p1: dataView[0],
-            p2: dataView[1]
+            p1: this.module.getValue(dataPtr, 'i32'),
+            p2: this.module.getValue(dataPtr + 4, 'i32')
           }
           break
         case EntityType.CIRCLE:
           this.module._wasm_get_circle_data(this.sketchPtr, entity.id, dataPtr, dataPtr + 4)
           entity.data = {
-            center: dataView[0],
-            radius_param: dataView[1]
+            center: this.module.getValue(dataPtr, 'i32'),
+            radius_param: this.module.getValue(dataPtr + 4, 'i32')
           }
           break
       }

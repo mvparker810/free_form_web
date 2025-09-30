@@ -1,20 +1,8 @@
 {
   "version": "0.2.0",
-  "compounds": [
-    {
-      "name": "Run Fullstack (build backend + front)",
-      "configurations": ["Run Frontend (front)", "Run Backend (build+run)"],
-      "stopAll": true
-    },
-    {
-      "name": "Run Fullstack (no build)",
-      "configurations": ["Run Frontend (front)", "Run Backend (no build)"],
-      "stopAll": true
-    }
-  ],
   "configurations": [
     {
-      "name": "Run Frontend (front)",
+      "name": "Run Frontend (WASM mode)",
       "type": "node",
       "request": "launch",
       "cwd": "${workspaceFolder}/front",
@@ -23,20 +11,13 @@
       "console": "integratedTerminal"
     },
     {
-      "name": "Run Backend (build+run)",
-      "type": "cppvsdbg",
+      "name": "Build WASM + Run Frontend",
+      "type": "node",
       "request": "launch",
-      "program": "${workspaceFolder}/back/build/Release/backend.exe",
-      "preLaunchTask": "backend:build",
-      "cwd": "${workspaceFolder}/back",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "Run Backend (no build)",
-      "type": "cppvsdbg",
-      "request": "launch",
-      "program": "${workspaceFolder}/back/build/Release/backend.exe",
-      "cwd": "${workspaceFolder}/back",
+      "cwd": "${workspaceFolder}/front",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "preLaunchTask": "wasm:build-and-copy",
       "console": "integratedTerminal"
     }
   ]

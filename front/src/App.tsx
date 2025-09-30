@@ -432,6 +432,12 @@ export default function App() {
   const [isPixelated, setIsPixelated] = useState<boolean>(false)
   const [currentFont, setCurrentFont] = useState<string>('RetroGaming')
 
+  // Console resize state
+  const [consoleHeight, setConsoleHeight] = useState(110)
+  const [isResizingConsole, setIsResizingConsole] = useState(false)
+  const consoleResizeStartY = useRef(0)
+  const consoleResizeStartHeight = useRef(110)
+
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   function appendConsole(msg: string) {
@@ -455,14 +461,40 @@ export default function App() {
         appendConsole('Initializing WASM module...')
         const wasmSketch = await getSketch()
         setSketch(wasmSketch)
-        setWasmReady(true)
         appendConsole('WASM module initialized successfully')
 
         // Initialize with some test data
-        wasmSketch.addPoint(4, -4)
-        wasmSketch.addPoint(12, -30)
-        wasmSketch.addLine(0, 0, 10, 10)
-        appendConsole(`Created initial sketch with ${wasmSketch.getAllEntities().length} entities`)
+        const p1 = wasmSketch.addPoint(4, -4)
+        const p2 = wasmSketch.addPoint(12, -30)
+        const line = wasmSketch.addLine(0, 0, 10, 10)
+        appendConsole(`Added entities: point1=${p1}, point2=${p2}, line=${line}`)
+
+        const entities = wasmSketch.getAllEntities()
+        const params = wasmSketch.getAllParameters()
+        appendConsole(`Created initial sketch with ${entities.length} entities, ${params.length} params`)
+
+        if (entities.length === 0) {
+          appendConsole('! Warning: No entities were created. Check WASM functions.')
+        }
+
+        setWasmReady(true) // Set ready flag after initialization
+
+        // Manually trigger initial data fetch with the wasmSketch instance
+        // (can't rely on useEffect due to React state timing)
+        const mappedEntities = entities.map(e => ({
+          id: e.id,
+          gen: 0,
+          type: e.type,
+          data: e.data
+        }))
+        const mappedParams = params.map(p => ({
+          id: p.id,
+          gen: 0,
+          value: p.value
+        }))
+        appendConsole(`Setting initial ${mappedEntities.length} entities and ${mappedParams.length} params`)
+        setBackendEntities(mappedEntities)
+        setBackendParams(mappedParams)
       } catch (error) {
         appendConsole(`WASM initialization failed: ${error}`)
       }
@@ -470,17 +502,60 @@ export default function App() {
     initWasm()
   }, [])
 
+  // Fetch data when WASM becomes ready (for subsequent operations)
+  useEffect(() => {
+    if (wasmReady && sketch) {
+      fetchBackendData()
+    }
+  }, [wasmReady, sketch])
+
   useEffect(() => { appendConsole(runSelfTests()) }, [])
+
+  // Handle wheel event with passive: false to allow preventDefault
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const delta = -e.deltaY
+      const scaleFactor = Math.exp(delta * 0.001)
+      const rect = canvas.getBoundingClientRect()
+      const x = (e.clientX - rect.left) - rect.width/2
+      const y = (e.clientY - rect.top) - rect.height/2
+      const beforeX = (x - origin.x)/zoom
+      const beforeY = -(y - origin.y)/zoom
+
+      setZoom(prev => {
+        const next = clamp(prev * scaleFactor, 0.2, 10)
+        const afterScale = next / prev
+        setOrigin(o => ({
+          x: (o.x - beforeX * prev) * afterScale + beforeX * next,
+          y: (o.y - beforeY * prev) * afterScale + beforeY * next
+        }))
+        return next
+      })
+    }
+
+    canvas.addEventListener('wheel', handleWheel, { passive: false })
+    return () => canvas.removeEventListener('wheel', handleWheel)
+  }, [zoom, origin])
 
   async function fetchBackendData() {
     if (!sketch || !wasmReady) {
-      appendConsole('! WASM not ready')
+      appendConsole('! WASM not ready for fetchBackendData')
       return
     }
 
     try {
+      appendConsole('Fetching data from WASM...')
       const entities = sketch.getAllEntities()
       const params = sketch.getAllParameters()
+
+      appendConsole(`Raw WASM data: ${entities.length} entities, ${params.length} params`)
+      if (entities.length > 0) {
+        appendConsole(`First entity: ${JSON.stringify(entities[0])}`)
+      }
 
       // Map WASM entities to match backend format
       const mappedEntities = entities.map(e => ({
@@ -497,13 +572,15 @@ export default function App() {
         value: p.value
       }))
 
+      appendConsole(`Setting ${mappedEntities.length} entities and ${mappedParams.length} params`)
       setBackendEntities(mappedEntities)
       setBackendParams(mappedParams)
       setBackendConstraints([]) // Constraints not yet implemented in WASM wrapper
 
-      appendConsole(`WASM data: ${entities.length} entities, ${params.length} parameters`)
+      appendConsole(`✓ WASM data loaded: ${entities.length} entities, ${params.length} parameters`)
     } catch (e: any) {
       appendConsole(`! Failed to fetch WASM data: ${e?.message ?? e}`)
+      console.error('WASM fetch error:', e)
     }
   }
 
@@ -614,14 +691,19 @@ export default function App() {
     }
   }
 
-  useEffect(() => {
-    fetchBackendData()
-  }, [])
+  // fetchBackendData is now called when wasmReady becomes true
 
   function onResizeStart(e: React.MouseEvent) {
     setIsResizing(true)
     resizeStartX.current = e.clientX
     resizeStartWidth.current = rightPanelWidth
+  }
+
+  function onConsoleResizeStart(e: React.MouseEvent) {
+    e.preventDefault()
+    setIsResizingConsole(true)
+    consoleResizeStartY.current = e.clientY
+    consoleResizeStartHeight.current = consoleHeight
   }
 
   useEffect(() => {
@@ -651,6 +733,34 @@ export default function App() {
       window.removeEventListener('mouseup', onResizeEnd)
     }
   }, [isResizing])
+
+  useEffect(() => {
+    if (!isResizingConsole) return
+
+    function onConsoleResizeMove(e: MouseEvent) {
+      e.preventDefault()
+      const delta = consoleResizeStartY.current - e.clientY
+      const newHeight = Math.max(50, Math.min(500, consoleResizeStartHeight.current + delta))
+      setConsoleHeight(newHeight)
+    }
+
+    function onConsoleResizeEnd() {
+      setIsResizingConsole(false)
+    }
+
+    document.body.style.cursor = 'ns-resize'
+    document.body.style.userSelect = 'none'
+
+    window.addEventListener('mousemove', onConsoleResizeMove)
+    window.addEventListener('mouseup', onConsoleResizeEnd)
+
+    return () => {
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      window.removeEventListener('mousemove', onConsoleResizeMove)
+      window.removeEventListener('mouseup', onConsoleResizeEnd)
+    }
+  }, [isResizingConsole])
 
   useEffect(() => {
     const cvs = canvasRef.current
@@ -884,21 +994,6 @@ export default function App() {
     return { x: (x - origin.x)/zoom, y: -(y - origin.y)/zoom }
   }
 
-  function onWheel(e: React.WheelEvent<HTMLCanvasElement>) {
-    e.preventDefault()
-    const delta = -e.deltaY
-    const scaleFactor = Math.exp(delta * 0.001)
-    const before = screenToWorld(e.clientX, e.clientY)
-    setZoom(prev => {
-      const next = clamp(prev * scaleFactor, 0.2, 10)
-      const afterScale = next / prev
-      setOrigin(o => ({
-        x: (o.x - before.x * prev) * afterScale + before.x * next,
-        y: (o.y - before.y * prev) * afterScale + before.y * next,
-      }))
-      return next
-    })
-  }
 
   function onMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
     if (e.button === 1 || e.button === 2) {
@@ -1079,7 +1174,6 @@ export default function App() {
                   filter: 'none'
                 })
               }}
-              onWheel={onWheel}
               onMouseDown={onMouseDown}
               onMouseMove={onMouseMove}
               onMouseUp={onMouseUp}
@@ -1113,7 +1207,7 @@ export default function App() {
           />
         </div>
       </div>
-      <Console out={out} />
+      <Console out={out} height={consoleHeight} onResizeStart={onConsoleResizeStart} />
       <StyleTag />
     </div>
   )
@@ -1365,9 +1459,19 @@ function RightPanel({ activeTab, setActiveTab, backendEntities, backendParams, b
   )
 }
 
-function Console({ out }:{ out: string }) {
+function Console({ out, height, onResizeStart }:{ out: string, height: number, onResizeStart: (e: React.MouseEvent) => void }) {
   return (
-    <div style={styles.console}>
+    <div style={{ ...styles.console, height }}>
+      <div
+        style={{
+          height: 4,
+          cursor: 'ns-resize',
+          background: '#ffffff',
+          position: 'relative',
+          zIndex: 10
+        }}
+        onMouseDown={onResizeStart}
+      />
       <div style={styles.sectionHeader}>Console</div>
       <pre className="console-pre">{out}</pre>
     </div>

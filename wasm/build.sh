@@ -7,7 +7,7 @@ source ../emsdk/emsdk_env.sh
 emcc freeform_wasm.c \
   -o freeform.js \
   -s EXPORTED_FUNCTIONS='["_malloc","_free"]' \
-  -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap"]' \
+  -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","getValue","setValue"]' \
   -s MODULARIZE=1 \
   -s EXPORT_NAME='createFreeFormModule' \
   -s ALLOW_MEMORY_GROWTH=1 \
