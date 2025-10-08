@@ -64,6 +64,45 @@
       "label": "build:all (WASM + frontend)",
       "dependsOrder": "sequence",
       "dependsOn": ["wasm:build-and-copy", "frontend:build"]
+    },
+    {
+      "label": "docs:generate",
+      "type": "shell",
+      "command": "& 'C:/Program Files/doxygen/bin/doxygen.exe'",
+      "options": { "cwd": "${workspaceFolder}/extern/free_form" },
+      "windows": {
+        "command": "& 'C:/Program Files/doxygen/bin/doxygen.exe'"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "group": "build"
+    },
+    {
+      "label": "docs:open",
+      "type": "shell",
+      "command": "start",
+      "args": ["docs/index.html"],
+      "options": { "cwd": "${workspaceFolder}/extern/free_form" },
+      "windows": {
+        "command": "cmd",
+        "args": ["/c", "start", "docs/index.html"]
+      },
+      "linux": {
+        "command": "xdg-open",
+        "args": ["docs/index.html"]
+      },
+      "osx": {
+        "command": "open",
+        "args": ["docs/index.html"]
+      },
+      "dependsOn": ["docs:generate"],
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      }
     }
   ]
 }

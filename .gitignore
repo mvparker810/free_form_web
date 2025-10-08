@@ -19,3 +19,8 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Generated documentation
+extern/free_form/docs/
+extern/free_form/html/
+extern/free_form/latex/

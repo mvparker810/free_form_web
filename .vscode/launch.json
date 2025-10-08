@@ -19,6 +19,6 @@
       "runtimeArgs": ["run", "dev"],
       "preLaunchTask": "wasm:build-and-copy",
       "console": "integratedTerminal"
-    }
+    },
   ]
 }
