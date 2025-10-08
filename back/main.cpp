@@ -91,7 +91,7 @@ int main() {
         res.set_content(params_array.dump(2), "application/json");
     });
 
-    // GET /api/sketch/entities
+    // GET /api/sketch/entitiess
     api.Get("/api/sketch/entities", [&sketch](const httplib::Request&, httplib::Response& res) {
         json entities_array = json::array();
         
